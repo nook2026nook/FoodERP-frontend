@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { authAPI } from '../api/client';
+import { authAPI, errorMessage } from '../api/client';
 import Icon from './Icon';
 
 export default function LoginModal({ onLogin }) {
@@ -15,7 +15,7 @@ export default function LoginModal({ onLogin }) {
       onLogin(response.data);
     },
     onError: (error) => {
-      setErrorMsg(error.response?.data?.error || 'Login failed. Please try again.');
+      setErrorMsg(errorMessage(error, 'Login failed. Please try again.'));
     }
   });
 

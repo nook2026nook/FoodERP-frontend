@@ -57,7 +57,13 @@ export const authAPI = {
 };
 
 /** Readable message from an API error. */
-export const errorMessage = (e, fallback) => e?.response?.data?.error || fallback;
+// The API sends `error` as a string; proxies/hosts (e.g. Vercel 404s) send { code, message }.
+export const errorMessage = (e, fallback) => {
+  const err = e?.response?.data?.error;
+  if (typeof err === 'string') return err;
+  if (err && typeof err.message === 'string') return err.message;
+  return fallback;
+};
 
 // Formulation vault endpoints
 export const vaultAPI = {

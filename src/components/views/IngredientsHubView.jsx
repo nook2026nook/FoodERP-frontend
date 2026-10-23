@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Pencil, Trash2, X } from 'lucide-react';
-import { itemsAPI, suppliersAPI } from '../../api/client';
+import { itemsAPI, suppliersAPI, errorMessage } from '../../api/client';
 
 const EDIT_ROLES = ['Administrator', 'Production Operator'];
 
-const errorMessage = (e, fallback) => e.response?.data?.error || fallback;
 const money = (n) => `$${Number(n).toFixed(2)}`;
 
 export default function IngredientsHubView({ ingredientSubTab, setIngredientSubTab, currentUserRole, showToast }) {
