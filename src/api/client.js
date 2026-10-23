@@ -47,7 +47,7 @@ api.interceptors.response.use(
 // Auth endpoints
 export const authAPI = {
   login: (email, password) =>
-    api.post('/auth/login', { email, password }),
+    api.post('/auth/login', { email, password }, { keepSessionOn401: true }),
 
   getCurrentUser: () =>
     api.get('/auth/me'),
