@@ -328,11 +328,11 @@ function Formulations({ currentUserRole, showToast, onLock }) {
               <span className="text-xs font-bold text-amber-900 uppercase">🌾 Baking Ingredients (grams per batch)</span>
               {form.items.map((row, idx) => (
                 <div key={idx} className="flex gap-2 items-center">
-                  <select aria-label="Baking ingredient" value={row.item_id} onChange={(e) => updateRow('items', idx, 'item_id', e.target.value)} className={`${inputClass} flex-1`}>
+                  <select aria-label="Baking ingredient" value={row.item_id} onChange={(e) => updateRow('items', idx, 'item_id', e.target.value)} className={`${inputClass} !w-auto min-w-0 flex-1`}>
                     <option value="">Select baking ingredient…</option>
                     {baking.map((i) => <option key={i.id} value={i.id}>{i.name} ({money(i.cost_per_pack)}/{Number(i.unit_pack_size)} kg)</option>)}
                   </select>
-                  <input aria-label="Grams" type="number" step="any" min="0" placeholder="Grams (g)" value={row.grams_per_batch} onChange={(e) => updateRow('items', idx, 'grams_per_batch', e.target.value)} className={`${inputClass} w-32`} />
+                  <input aria-label="Grams" type="number" step="any" min="0" placeholder="Grams (g)" value={row.grams_per_batch} onChange={(e) => updateRow('items', idx, 'grams_per_batch', e.target.value)} className={`${inputClass} !w-32 shrink-0`} />
                   {form.items.length > 1 && (
                     <button type="button" onClick={() => removeRow('items', idx)} className="text-red-500" aria-label="Remove ingredient"><Trash2 size={16} /></button>
                   )}

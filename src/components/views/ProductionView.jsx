@@ -167,7 +167,7 @@ function SplitEditor({ requirement, rows, onChange, disabled }) {
       )}
       {rows.map((row, idx) => (
         <div key={idx} className="flex gap-2 items-center">
-          <select aria-label={`Lot for ${requirement.item_name}`} value={row.lot_id} onChange={(e) => update(idx, 'lot_id', e.target.value)} className={`${inputClass} flex-1 font-mono`} disabled={disabled}>
+          <select aria-label={`Lot for ${requirement.item_name}`} value={row.lot_id} onChange={(e) => update(idx, 'lot_id', e.target.value)} className={`${inputClass} !w-auto min-w-0 flex-1 font-mono`} disabled={disabled}>
             <option value="">Select lot…</option>
             {requirement.lots.map((l) => (
               <option key={l.lot_id} value={l.lot_id}>
@@ -175,7 +175,7 @@ function SplitEditor({ requirement, rows, onChange, disabled }) {
               </option>
             ))}
           </select>
-          <input aria-label={`Quantity for ${requirement.item_name}`} type="number" step="any" min="0" value={row.quantity} onChange={(e) => update(idx, 'quantity', e.target.value)} className={`${inputClass} w-28`} disabled={disabled} />
+          <input aria-label={`Quantity for ${requirement.item_name}`} type="number" step="any" min="0" value={row.quantity} onChange={(e) => update(idx, 'quantity', e.target.value)} className={`${inputClass} !w-28 shrink-0`} disabled={disabled} />
           <span className="text-[11px] text-slate-500 w-8">{unit}</span>
           {rows.length > 1 && !disabled && (
             <button type="button" onClick={() => onChange(rows.filter((_, i) => i !== idx))} className="text-red-500" aria-label="Remove split"><Trash2 size={15} /></button>

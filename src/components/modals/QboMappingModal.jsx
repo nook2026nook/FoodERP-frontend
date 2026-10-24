@@ -205,7 +205,7 @@ function OpenLines({ showToast }) {
                 <td className="px-3 py-2">
                   {l.recipe_id ? (
                     <div className="flex flex-wrap gap-1 items-center">
-                      <select aria-label="Batch" value={picked[l.id] || ''} onChange={(e) => setPicked((p) => ({ ...p, [l.id]: e.target.value }))} className={`${inputClass} w-44 font-mono`}>
+                      <select aria-label="Batch" value={picked[l.id] || ''} onChange={(e) => setPicked((p) => ({ ...p, [l.id]: e.target.value }))} className={`${inputClass} !w-44 font-mono`}>
                         <option value="">Oldest batch first</option>
                         {options.map((b) => <option key={b.batch_id} value={b.batch_id}>{b.batch_number} ({b.boxes_on_hand} box · {b.bags_on_hand} bag)</option>)}
                       </select>
