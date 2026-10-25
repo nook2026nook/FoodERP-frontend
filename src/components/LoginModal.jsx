@@ -93,6 +93,11 @@ export default function LoginModal({ onLogin }) {
 
         <div className="text-center text-xs text-slate-400">
           <p>Secure authentication with role-based access control</p>
+          <p className="mt-2">
+            <a href="/privacy" className="underline hover:text-slate-600">Privacy Policy</a>
+            {' · '}
+            <a href="/terms" className="underline hover:text-slate-600">Terms &amp; Conditions</a>
+          </p>
         </div>
       </div>
     </div>

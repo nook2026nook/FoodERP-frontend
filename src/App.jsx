@@ -6,6 +6,7 @@ import ChangePasswordScreen from './components/ChangePasswordScreen';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Toast from './components/Toast';
+import LegalPages, { LEGAL_PATHS } from './components/LegalPages';
 
 // Import all view components
 import DashboardView from './components/views/DashboardView';
@@ -70,6 +71,10 @@ function App() {
     if (subTab) setIngredientSubTab(subTab);
     setIsMobileMenuOpen(false);
   };
+
+  // Public legal pages (no login) for the Intuit app listing
+  const legalPath = window.location.pathname.replace(/\/+$/, '');
+  if (LEGAL_PATHS.includes(legalPath)) return <LegalPages path={legalPath} />;
 
   // Redirect to login if not authenticated
   if (!currentUser) {
