@@ -11,11 +11,13 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
+  const [startDate, setStartDate] = useState('');
 
   const load = useCallback(async () => {
     try {
       const { data } = await qboAPI.getStatus();
       setStatus(data);
+      setStartDate(data.sync_start_date || '');
     } catch (e) {
       showToast(errorMessage(e, 'Could not load QuickBooks status'), 'error');
     }
@@ -58,6 +60,25 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
       onSynced?.();
     } catch (e) {
       showToast(errorMessage(e, 'Sync failed'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveStartDate = async () => {
+    const removeEarlier = Boolean(startDate) && window.confirm(
+      `Also remove QuickBooks invoices already synced that are dated before ${startDate}? Their stock returns to the batches.\n\nOK = remove them, Cancel = keep them.`
+    );
+    setBusy(true);
+    try {
+      const { data } = await qboAPI.setSyncStartDate(startDate, removeEarlier);
+      showToast(data.start_date
+        ? `Invoices will sync from ${data.start_date}${data.removed ? `; ${data.removed} earlier invoice(s) removed` : ''}`
+        : 'Sync start date cleared');
+      await load();
+      if (data.removed) onSynced?.();
+    } catch (e) {
+      showToast(errorMessage(e, 'Could not save the sync start date'), 'error');
     } finally {
       setBusy(false);
     }
@@ -109,6 +130,29 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
         </div>
       </div>
 
+      {isAdmin && status.configured && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label htmlFor="qbo-start-date" className="font-bold text-slate-600">Sync invoices dated from</label>
+          <input
+            id="qbo-start-date"
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="border rounded-lg px-2 py-1"
+          />
+          <button
+            onClick={saveStartDate}
+            disabled={busy || startDate === (status.sync_start_date || '')}
+            className="px-3 py-1.5 font-bold bg-slate-100 border rounded-lg disabled:opacity-60"
+          >
+            Save
+          </button>
+          <span className="text-[11px] text-slate-500">
+            {status.sync_start_date ? 'Earlier invoices are never pulled.' : 'Not set: first sync reads the last 30 days.'}
+          </span>
+        </div>
+      )}
+
       {(open.unmapped > 0 || open.short > 0) && (
         <p className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
           {open.unmapped > 0 && `${open.unmapped} invoice line(s) use QuickBooks products that aren't mapped to a recipe. `}
@@ -120,7 +164,7 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
       {s && (
         <p className="text-[11px] text-slate-500">
           Last run ({s.mode}): {s.invoices} invoice(s) read, {s.created} line(s) added, {s.skipped} already synced
-          {s.removed ? `, ${s.removed} removed` : ''}{s.errors.length ? `, ${s.errors.length} failed: ${s.errors.map((e) => `${e.invoice} (${e.error})`).join('; ')}` : ''}.
+          {s.removed ? `, ${s.removed} removed` : ''}{s.before_start ? `, ${s.before_start} dated before ${s.start_date} ignored` : ''}{s.errors.length ? `, ${s.errors.length} failed: ${s.errors.map((e) => `${e.invoice} (${e.error})`).join('; ')}` : ''}.
         </p>
       )}
 
