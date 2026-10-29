@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Download, Search, Trash2 } from 'lucide-react';
 import { inventoryAPI, shipmentsAPI, errorMessage } from '../../api/client';
-import { Card, Field, inputClass, todayIso } from '../ui';
+import { Card, Field, downloadCsv, inputClass, todayIso } from '../ui';
 import QuickBooksPanel from '../QuickBooksPanel';
 
 const EDIT_ROLES = ['Administrator', 'Shipping Clerk'];
 const emptyLine = () => ({ product: '', unit_type: 'box', quantity: '', batch_id: '' });
+const noFilters = { search: '', from: '', to: '', source: '', attention: false };
+const needsAttention = (s) => s.lines.some((l) => l.allocation_status !== 'allocated');
 
 export default function ShippingView({ currentUserRole, showToast }) {
   const canEdit = EDIT_ROLES.includes(currentUserRole);
@@ -16,6 +18,8 @@ export default function ShippingView({ currentUserRole, showToast }) {
   const [shippedAt, setShippedAt] = useState(todayIso());
   const [lines, setLines] = useState([emptyLine()]);
   const [saving, setSaving] = useState(false);
+  const [filters, setFilters] = useState(noFilters);
+  const setFilter = (field, value) => setFilters((f) => ({ ...f, [field]: value }));
 
   const load = useCallback(async () => {
     try {
@@ -69,6 +73,35 @@ export default function ShippingView({ currentUserRole, showToast }) {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Dispatch list filters (date range, source, search), applied in the browser.
+  const visible = useMemo(() => {
+    const term = filters.search.trim().toLowerCase();
+    return shipments.filter((s) => {
+      if (filters.from && s.shipped_at < filters.from) return false;
+      if (filters.to && s.shipped_at > filters.to) return false;
+      if (filters.source && s.source !== filters.source) return false;
+      if (filters.attention && !needsAttention(s)) return false;
+      if (!term) return true;
+      return [s.customer_name, s.invoice_number, s.shipped_at, s.source,
+        ...s.lines.map((l) => l.product_description),
+        ...s.lines.flatMap((l) => l.allocations.map((a) => a.batch_number))]
+        .some((v) => String(v || '').toLowerCase().includes(term));
+    });
+  }, [shipments, filters]);
+  const filtered = JSON.stringify(filters) !== JSON.stringify(noFilters);
+  const qboCount = shipments.filter((s) => s.source === 'QuickBooks API').length;
+  const attentionCount = shipments.filter(needsAttention).length;
+
+  const exportCsv = () => {
+    downloadCsv(`dispatches_${filters.from || 'all'}_to_${filters.to || todayIso()}.csv`, [
+      ['Date', 'Customer', 'Invoice', 'Product', 'Quantity', 'Unit', 'Batches', 'Source', 'Allocation'],
+      ...visible.flatMap((s) => s.lines.map((l) => [
+        s.shipped_at, s.customer_name, s.invoice_number, l.product_description, l.quantity, l.unit_type || '',
+        l.allocations.map((a) => a.batch_number).join(' '), s.source, l.allocation_status
+      ]))
+    ]);
   };
 
   const remove = async (s) => {
@@ -141,7 +174,49 @@ export default function ShippingView({ currentUserRole, showToast }) {
         </Card>
       )}
 
-      <Card title={`Dispatches (${shipments.length})`}>
+      <Card
+        title={filtered ? `Dispatches (${visible.length} of ${shipments.length})` : `Dispatches (${shipments.length})`}
+        actions={(
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+            <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">{qboCount} from QuickBooks</span>
+            <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">{shipments.length - qboCount} manual</span>
+            {attentionCount > 0 && <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700">{attentionCount} need attention</span>}
+            <button type="button" onClick={exportCsv} disabled={!visible.length} className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 border rounded-lg text-slate-700 disabled:opacity-60">
+              <Download size={13} /> Export CSV
+            </button>
+          </div>
+        )}
+      >
+        <div className="grid grid-cols-2 sm:grid-cols-12 gap-2 items-end">
+          <Field label="Search" htmlFor="df-search" className="col-span-2 sm:col-span-4">
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+              <input id="df-search" value={filters.search} onChange={(e) => setFilter('search', e.target.value)} placeholder="Customer, invoice #, product, batch…" className={`${inputClass} pl-8`} />
+            </div>
+          </Field>
+          <Field label="From" htmlFor="df-from" className="sm:col-span-2">
+            <input id="df-from" type="date" value={filters.from} onChange={(e) => setFilter('from', e.target.value)} className={inputClass} />
+          </Field>
+          <Field label="To" htmlFor="df-to" className="sm:col-span-2">
+            <input id="df-to" type="date" value={filters.to} min={filters.from || undefined} onChange={(e) => setFilter('to', e.target.value)} className={inputClass} />
+          </Field>
+          <Field label="Source" htmlFor="df-source" className="sm:col-span-2">
+            <select id="df-source" value={filters.source} onChange={(e) => setFilter('source', e.target.value)} className={inputClass}>
+              <option value="">All</option>
+              <option value="QuickBooks API">QuickBooks</option>
+              <option value="Manual">Manual</option>
+            </select>
+          </Field>
+          <div className="col-span-2 sm:col-span-2 flex items-center gap-2 pb-2">
+            <label className="flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer">
+              <input type="checkbox" checked={filters.attention} onChange={(e) => setFilter('attention', e.target.checked)} className="w-3.5 h-3.5 rounded" />
+              Needs attention
+            </label>
+            {filtered && (
+              <button type="button" onClick={() => setFilters(noFilters)} className="ml-auto text-xs font-bold text-emerald-700">Reset</button>
+            )}
+          </div>
+        </div>
         <div className="overflow-x-auto -mx-6">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-y border-slate-200">
@@ -156,7 +231,7 @@ export default function ShippingView({ currentUserRole, showToast }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {shipments.map((s) => (
+              {visible.map((s) => (
                 <tr key={s.id} className="hover:bg-slate-50 align-top">
                   <td className="px-6 py-2.5 whitespace-nowrap">{s.shipped_at}</td>
                   <td className="px-6 py-2.5 font-bold text-slate-800">{s.customer_name}</td>
@@ -184,8 +259,10 @@ export default function ShippingView({ currentUserRole, showToast }) {
                   )}
                 </tr>
               ))}
-              {shipments.length === 0 && (
-                <tr><td colSpan={canEdit ? 7 : 6} className="text-center py-8 text-slate-400">No dispatches recorded yet.</td></tr>
+              {visible.length === 0 && (
+                <tr><td colSpan={canEdit ? 7 : 6} className="text-center py-8 text-slate-400">
+                  {shipments.length === 0 ? 'No dispatches recorded yet.' : 'No dispatches match these filters.'}
+                </td></tr>
               )}
             </tbody>
           </table>

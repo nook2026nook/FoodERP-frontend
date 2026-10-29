@@ -41,7 +41,8 @@ function App() {
     setTimeout(() => setToast(null), 3500);
   }, []);
 
-  // Back from Intuit's consent page: /?qbo=connected or /?qbo=error&message=...
+  // Back from Intuit: /?qbo=connected, /?qbo=error&message=..., or the app's Launch (qbo=launch)
+  // and Disconnect (qbo=disconnected) URLs.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const result = params.get('qbo');
@@ -49,6 +50,8 @@ function App() {
     window.history.replaceState(null, '', window.location.pathname);
     setActiveTab('shipping');
     if (result === 'connected') showToast('QuickBooks connected. Map your products, then sync invoices.');
+    else if (result === 'launch') showToast('Opened from QuickBooks. Use the QuickBooks panel to connect or sync.');
+    else if (result === 'disconnected') showToast('QuickBooks was disconnected. An administrator can connect it again here.');
     else showToast(params.get('message') || 'QuickBooks connection failed', 'error');
   }, [showToast]);
 

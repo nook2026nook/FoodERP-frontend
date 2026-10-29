@@ -12,12 +12,14 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
   const [busy, setBusy] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
   const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const load = useCallback(async () => {
     try {
       const { data } = await qboAPI.getStatus();
       setStatus(data);
       setStartDate(data.sync_start_date || '');
+      setEndDate(data.sync_end_date || '');
     } catch (e) {
       showToast(errorMessage(e, 'Could not load QuickBooks status'), 'error');
     }
@@ -66,15 +68,20 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
   };
 
   const saveStartDate = async () => {
+    if (startDate && endDate && endDate < startDate) {
+      showToast('The "to" date must be on or after the "from" date', 'error');
+      return;
+    }
     const removeEarlier = Boolean(startDate) && window.confirm(
       `Also remove QuickBooks invoices already synced that are dated before ${startDate}? Their stock returns to the batches.\n\nOK = remove them, Cancel = keep them.`
     );
     setBusy(true);
     try {
-      const { data } = await qboAPI.setSyncStartDate(startDate, removeEarlier);
-      showToast(data.start_date
-        ? `Invoices will sync from ${data.start_date}${data.removed ? `; ${data.removed} earlier invoice(s) removed` : ''}`
-        : 'Sync start date cleared');
+      const { data } = await qboAPI.setSyncStartDate(startDate, removeEarlier, endDate);
+      const range = [data.start_date && `from ${data.start_date}`, data.end_date && `to ${data.end_date}`].filter(Boolean).join(' ');
+      showToast(range
+        ? `Invoices will sync ${range}${data.removed ? `; ${data.removed} earlier invoice(s) removed` : ''}`
+        : 'Sync dates cleared: all invoices will sync');
       await load();
       if (data.removed) onSynced?.();
     } catch (e) {
@@ -140,15 +147,28 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
             onChange={(e) => setStartDate(e.target.value)}
             className="border rounded-lg px-2 py-1"
           />
+          <label htmlFor="qbo-end-date" className="font-bold text-slate-600">to (optional)</label>
+          <input
+            id="qbo-end-date"
+            type="date"
+            value={endDate}
+            min={startDate || undefined}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="border rounded-lg px-2 py-1"
+          />
           <button
             onClick={saveStartDate}
-            disabled={busy || startDate === (status.sync_start_date || '')}
+            disabled={busy || (startDate === (status.sync_start_date || '') && endDate === (status.sync_end_date || ''))}
             className="px-3 py-1.5 font-bold bg-slate-100 border rounded-lg disabled:opacity-60"
           >
             Save
           </button>
           <span className="text-[11px] text-slate-500">
-            {status.sync_start_date ? 'Earlier invoices are never pulled.' : 'Not set: first sync reads the last 30 days.'}
+            {status.sync_start_date
+              ? `Invoices dated before ${status.sync_start_date}${status.sync_end_date ? ` or after ${status.sync_end_date}` : ''} are never pulled.`
+              : status.sync_end_date
+                ? `Invoices dated after ${status.sync_end_date} are never pulled; first sync reads the last 30 days.`
+                : 'Not set: first sync reads the last 30 days.'}
           </span>
         </div>
       )}
@@ -164,7 +184,7 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
       {s && (
         <p className="text-[11px] text-slate-500">
           Last run ({s.mode}): {s.invoices} invoice(s) read, {s.created} line(s) added, {s.skipped} already synced
-          {s.removed ? `, ${s.removed} removed` : ''}{s.before_start ? `, ${s.before_start} dated before ${s.start_date} ignored` : ''}{s.errors.length ? `, ${s.errors.length} failed: ${s.errors.map((e) => `${e.invoice} (${e.error})`).join('; ')}` : ''}.
+          {s.removed ? `, ${s.removed} removed` : ''}{s.before_start ? `, ${s.before_start} dated before ${s.start_date} ignored` : ''}{s.after_end ? `, ${s.after_end} dated after ${s.end_date} ignored` : ''}{s.errors.length ? `, ${s.errors.length} failed: ${s.errors.map((e) => `${e.invoice} (${e.error})`).join('; ')}` : ''}.
         </p>
       )}
 

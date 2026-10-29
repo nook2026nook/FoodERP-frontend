@@ -161,8 +161,8 @@ export const qboAPI = {
   },
   disconnect: () => api.post('/qbo/disconnect'),
   syncInvoices: () => api.post('/qbo/sync-invoices'),
-  setSyncStartDate: (startDate, removeEarlier = false) =>
-    api.put('/qbo/sync-start-date', { start_date: startDate || null, remove_earlier: removeEarlier }),
+  setSyncStartDate: (startDate, removeEarlier = false, endDate = null) =>
+    api.put('/qbo/sync-start-date', { start_date: startDate || null, end_date: endDate || null, remove_earlier: removeEarlier }),
   getItems: () => api.get('/qbo/items'),
   getItemMappings: () => api.get('/qbo/item-mappings'),
   createMapping: (data) => api.post('/qbo/item-mappings', data),
