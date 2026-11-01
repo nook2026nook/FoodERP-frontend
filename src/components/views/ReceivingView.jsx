@@ -30,13 +30,22 @@ export default function ReceivingView({ currentUserRole, showToast, onGoToIngred
   const [pageSize, setPageSize] = useState('10');
 
   const load = useCallback(async () => {
-    try {
-      const [i, s, l] = await Promise.all([itemsAPI.getAll(), suppliersAPI.getAll(), lotsAPI.getAll(false)]);
-      setItems(i.data);
-      setSuppliers(s.data);
-      setLots(l.data);
-    } catch (e) {
-      showToast(errorMessage(e, 'Failed to load receiving data'), 'error');
+    const results = await Promise.allSettled([
+      itemsAPI.getAll(),
+      suppliersAPI.getAll(),
+      lotsAPI.getAll(false)
+    ]);
+    const [itemsResult, suppliersResult, lotsResult] = results;
+    if (itemsResult.status === 'fulfilled') setItems(itemsResult.value.data);
+    if (suppliersResult.status === 'fulfilled') setSuppliers(suppliersResult.value.data);
+    if (lotsResult.status === 'fulfilled') setLots(lotsResult.value.data);
+
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length) {
+      showToast(
+        failures.map((result) => errorMessage(result.reason, 'Failed to load receiving data')).join('; '),
+        'error'
+      );
     }
   }, [showToast]);
 
