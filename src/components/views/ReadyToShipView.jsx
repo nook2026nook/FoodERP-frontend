@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, PackageOpen, PackageCheck } from 'lucide-react';
 import { inventoryAPI, errorMessage } from '../../api/client';
 import { StatusPill, money } from '../ui';
+import ExportDropdownMenu, { downloadCSV, todayStamp, usePageExport } from '../PageExport';
 
 const OPEN_BOX_ROLES = ['Administrator', 'Production Operator', 'Shipping Clerk'];
 const FORMATS = [
@@ -27,6 +28,24 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const exportCSV = () => {
+    const rows = [[
+      'Product Flavor', 'Ready 575g Boxes', '575g Box Valuation ($)', 'Ready 575g Loose Bags', '575g Loose Bag Value ($)',
+      'Ready 312g Boxes', '312g Box Valuation ($)', 'Ready 312g Loose Bags', '312g Loose Bag Value ($)', 'Total Finished Valuation ($)'
+    ]];
+    data.products.forEach((p) => {
+      const a = p.formats['575g'] || {};
+      const b = p.formats['312g'] || {};
+      rows.push([
+        p.recipe_name, a.boxes ?? 0, Number(a.box_value || 0).toFixed(2), a.bags ?? 0, Number(a.bag_value || 0).toFixed(2),
+        b.boxes ?? 0, Number(b.box_value || 0).toFixed(2), b.bags ?? 0, Number(b.bag_value || 0).toFixed(2), Number(p.total_value || 0).toFixed(2)
+      ]);
+    });
+    downloadCSV(`Ready_To_Ship_Inventory_${todayStamp()}.csv`, rows);
+    showToast('Ready to Ship inventory exported to Excel/CSV!');
+  };
+  usePageExport(exportCSV);
+
   const openBox = async (b) => {
     if (!window.confirm(`Open 1 box of ${b.format} from batch ${b.batch_number}? It becomes 12 loose bags.`)) return;
     try {
@@ -46,15 +65,18 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
             <PackageCheck size={18} className="text-blue-600" />
             Ready to Ship Inventory (Finished Goods Valuation)
           </h3>
-          <p className="text-xs text-slate-500">Released stock only. Master box valuation: (bag cost × 12) + outer box cost, × boxes in stock.</p>
+          <p className="text-xs text-slate-500">Released stock only. Master box valuation: (bag cost × 12) + outer box cost, × boxes in stock. Bag cost = dough, labor, wastage and bag material.</p>
         </div>
-        <div className="bg-emerald-50 border border-emerald-200 px-4 py-2.5 rounded-xl text-right">
-          <span className="text-[10px] font-bold text-emerald-800 uppercase block">Total finished goods stock value</span>
-          <span className="text-lg font-black text-emerald-700 tabular-nums">{money(data.total_value)}</span>
+        <div className="flex items-center gap-3">
+          <div className="bg-emerald-50 border border-emerald-200 px-4 py-2.5 rounded-xl text-right">
+            <span className="text-[10px] font-bold text-emerald-800 uppercase block">Total Finished Goods Stock Value:</span>
+            <span className="text-lg font-black text-emerald-700 tabular-nums">{money(data.total_value)}</span>
+          </div>
+          <ExportDropdownMenu onExportExcel={exportCSV} onPrintPDF={() => window.print()} />
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+      <div id="printable-audit-area" className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">

@@ -12,9 +12,9 @@ export const money = (n, digits = 2) => `$${fmt(n, digits)}`;
 /** Quantity with the unit an item is stocked in. */
 export const qty = (n, unitType) => (unitType === 'kg' ? `${fmt(n, 3)} kg` : `${fmt(n, 0)} units`);
 
-export function Card({ title, actions, children, className = '' }) {
+export function Card({ title, actions, children, className = '', id }) {
   return (
-    <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4 ${className}`}>
+    <div id={id} className={`bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4 ${className}`}>
       {(title || actions) && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           {title && <h3 className="font-bold text-sm text-slate-800">{title}</h3>}
@@ -69,17 +69,21 @@ export function useDebounced(value, ms = 350) {
 /** Download rows (array of arrays) as a CSV file that Excel opens directly. */
 export function downloadCsv(filename, rows) {
   const cell = (v) => {
-    const s = v === null || v === undefined ? '' : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    let s = v === null || v === undefined ? '' : String(v);
+    // Text starting with = + - @ would run as a formula in Excel: prefix it (numbers are left alone).
+    if (/^[=+\-@]/.test(s) && Number.isNaN(Number(s))) s = `'${s}`;
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const csv = rows.map((r) => r.map(cell).join(',')).join('\r\n');
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // Local calendar date as YYYY-MM-DD (toISOString would give the UTC date).

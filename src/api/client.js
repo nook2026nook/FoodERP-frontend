@@ -148,7 +148,8 @@ export const reportsAPI = {
 export const recallAPI = {
   search: (q) => api.get('/recall/search', { params: { q } }),
   byBatch: (batchNumber) => api.get(`/recall/batch/${encodeURIComponent(batchNumber)}`),
-  byLot: (lotNumber) => api.get(`/recall/lot/${encodeURIComponent(lotNumber)}`)
+  byLot: (lotNumber) => api.get(`/recall/lot/${encodeURIComponent(lotNumber)}`),
+  traceability: (q) => api.get('/recall/traceability', { params: { q } })
 };
 
 // QuickBooks endpoints

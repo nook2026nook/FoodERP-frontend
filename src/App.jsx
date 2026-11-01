@@ -6,6 +6,8 @@ import ChangePasswordScreen from './components/ChangePasswordScreen';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import Toast from './components/Toast';
+import Icon from './components/Icon';
+import { PageExportProvider } from './components/PageExport';
 import LegalPages, { LEGAL_PATHS } from './components/LegalPages';
 
 // Import all view components
@@ -19,6 +21,7 @@ import ReadyToShipView from './components/views/ReadyToShipView';
 import ReportsView from './components/views/ReportsView';
 import WastageView from './components/views/WastageView';
 import RecallView from './components/views/RecallView';
+import HelpGuideView from './components/views/HelpGuideView';
 import UserManagementModal from './components/modals/UserManagementModal';
 import BackupModal from './components/modals/BackupModal';
 
@@ -69,6 +72,18 @@ function App() {
     setActiveTab('dashboard');
   };
 
+  const allowedMenus = currentUser
+    ? (currentUser.role === 'Administrator'
+      ? ['dashboard', 'ingredients_hub', 'receiving', 'recipes', 'production', 'ready_to_ship', 'shipping', 'reports', 'wastage', 'recall', 'help']
+      : (currentUser.allowedMenus || []))
+    : [];
+
+  // Land on the first accessible module if the current one is not permitted.
+  useEffect(() => {
+    if (allowedMenus.length > 0 && !allowedMenus.includes(activeTab)) setActiveTab(allowedMenus[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, activeTab]);
+
   const handleNavClick = (tab, subTab = null) => {
     setActiveTab(tab);
     if (subTab) setIngredientSubTab(subTab);
@@ -100,6 +115,7 @@ function App() {
   }
 
   return (
+    <PageExportProvider>
     <div className="flex flex-col lg:flex-row h-screen overflow-hidden bg-slate-100">
       {/* Mobile Top Bar */}
       <div className="lg:hidden bg-slate-900 text-white h-16 flex items-center justify-between px-4 flex-shrink-0 z-30 shadow-md">
@@ -156,8 +172,26 @@ function App() {
           onLogout={handleLogout}
         />
 
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8">
-          {activeTab === 'dashboard' && (
+        <div id="printable-page-container" className="flex-1 overflow-y-auto p-4 sm:p-8">
+          {allowedMenus.length > 0 && !allowedMenus.includes(activeTab) && (
+            <div className="max-w-md mx-auto my-12 bg-white rounded-3xl p-8 border border-slate-200 text-center shadow-lg space-y-4">
+              <div className="w-16 h-16 bg-rose-50 text-rose-600 rounded-2xl flex items-center justify-center mx-auto border border-rose-200">
+                <Icon name="Lock" size={32} />
+              </div>
+              <h3 className="text-base font-black text-slate-800">Module Access Restricted</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Your assigned account role <b>({currentUser.role})</b> does not have permission to access this menu. Please contact your Plant Administrator.
+              </p>
+              <button
+                onClick={() => setActiveTab(allowedMenus[0] || 'dashboard')}
+                className="px-5 py-2.5 bg-slate-900 text-white text-xs font-bold rounded-xl shadow transition hover:bg-slate-800"
+              >
+                Return to Accessible Menu &rarr;
+              </button>
+            </div>
+          )}
+
+          {allowedMenus.includes('dashboard') && activeTab === 'dashboard' && (
             <DashboardView
               setActiveTab={setActiveTab}
               setIngredientSubTab={setIngredientSubTab}
@@ -165,7 +199,7 @@ function App() {
             />
           )}
 
-          {activeTab === 'ingredients_hub' && (
+          {allowedMenus.includes('ingredients_hub') && activeTab === 'ingredients_hub' && (
             <IngredientsHubView
               ingredientSubTab={ingredientSubTab}
               setIngredientSubTab={setIngredientSubTab}
@@ -174,7 +208,7 @@ function App() {
             />
           )}
 
-          {activeTab === 'receiving' && (
+          {allowedMenus.includes('receiving') && activeTab === 'receiving' && (
             <ReceivingView
               currentUserRole={currentUser.role}
               showToast={showToast}
@@ -185,45 +219,59 @@ function App() {
             />
           )}
 
-          {activeTab === 'recipes' && (
+          {allowedMenus.includes('recipes') && activeTab === 'recipes' && (
             <RecipesView
               currentUserRole={currentUser.role}
               showToast={showToast}
             />
           )}
 
-          {activeTab === 'production' && (
+          {allowedMenus.includes('production') && activeTab === 'production' && (
             <ProductionView
               currentUserRole={currentUser.role}
               showToast={showToast}
             />
           )}
 
-          {activeTab === 'shipping' && (
+          {allowedMenus.includes('shipping') && activeTab === 'shipping' && (
             <ShippingView
               currentUserRole={currentUser.role}
               showToast={showToast}
             />
           )}
 
-          {activeTab === 'ready_to_ship' && (
+          {allowedMenus.includes('ready_to_ship') && activeTab === 'ready_to_ship' && (
             <ReadyToShipView
               currentUserRole={currentUser.role}
               showToast={showToast}
             />
           )}
 
-          {activeTab === 'reports' && (
+          {allowedMenus.includes('reports') && activeTab === 'reports' && (
             <ReportsView showToast={showToast} />
           )}
 
-          {activeTab === 'wastage' && (
+          {allowedMenus.includes('wastage') && activeTab === 'wastage' && (
             <WastageView showToast={showToast} />
           )}
 
-          {activeTab === 'recall' && (
+          {allowedMenus.includes('recall') && activeTab === 'recall' && (
             <RecallView showToast={showToast} />
           )}
+
+          {allowedMenus.includes('help') && activeTab === 'help' && (
+            <HelpGuideView allowedMenus={allowedMenus} onNavigate={handleNavClick} />
+          )}
+
+          <footer className="mt-8 pt-4 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between text-[11px] text-slate-500 max-w-6xl">
+            <div className="flex items-center gap-2">
+              <img src="/Logo.png" alt="Nature's Mix" className="h-5 object-contain" />
+              <span className="font-semibold text-slate-700">Production Batch &amp; Traceability ERP</span>
+            </div>
+            <div className="font-semibold text-slate-600 mt-1 sm:mt-0">
+              Author: <span className="font-extrabold text-slate-900">John Gaya</span>
+            </div>
+          </footer>
         </div>
       </main>
 
@@ -245,6 +293,7 @@ function App() {
       {/* Toast Notification */}
       {toast && <Toast message={toast.message} type={toast.type} />}
     </div>
+    </PageExportProvider>
   );
 }
 

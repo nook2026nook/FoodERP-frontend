@@ -4,6 +4,7 @@ import {
   itemsAPI, recipesAPI, vaultAPI, setVaultToken, hasVaultToken, errorMessage
 } from '../../api/client';
 import { Card, Field, inputClass, money, fmt, useDebounced } from '../ui';
+import ExportDropdownMenu, { downloadCSV, todayStamp, usePageExport } from '../PageExport';
 
 const EDIT_ROLES = ['Administrator', 'Production Operator'];
 const ASSIGNMENTS = [
@@ -196,6 +197,27 @@ function Formulations({ currentUserRole, showToast, onLock }) {
 
   const baking = catalog.filter((i) => i.category === 'Baking');
   const packagingItems = catalog.filter((i) => i.category === 'Packaging');
+  const sortedRecipes = useMemo(
+    () => [...recipes].sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' })),
+    [recipes]
+  );
+
+  const exportCSV = () => {
+    const rows = [[
+      'Formulation Name', 'Wastage %', 'Labor Cost ($)', 'Total Baking Grams (g)', 'Batch Material Cost ($)',
+      '575g Material Cost ($)', '312g Material Cost ($)', 'Mfg Price 575g ($)', 'Dist Price 575g ($)', 'Retail Price 575g ($)',
+      'Mfg Price 312g ($)', 'Dist Price 312g ($)', 'Retail Price 312g ($)'
+    ]];
+    sortedRecipes.forEach((r) => rows.push([
+      r.name, Number(r.wastage_percent) || 0, (Number(r.labor_cost_per_batch) || 0).toFixed(2), Number(r.total_baking_grams) || 0,
+      (Number(r.cost_per_batch) || 0).toFixed(2), (Number(r.cost_per_575g) || 0).toFixed(2), (Number(r.cost_per_312g) || 0).toFixed(2),
+      (Number(r.mfg_price_575g) || 0).toFixed(2), (Number(r.dist_price_575g) || 0).toFixed(2), (Number(r.retail_price_575g) || 0).toFixed(2),
+      (Number(r.mfg_price_312g) || 0).toFixed(2), (Number(r.dist_price_312g) || 0).toFixed(2), (Number(r.retail_price_312g) || 0).toFixed(2)
+    ]));
+    downloadCSV(`Formulations_Costing_${todayStamp()}.csv`, rows);
+    showToast('Formulations exported to Excel/CSV!');
+  };
+  usePageExport(exportCSV);
   const itemById = useMemo(() => Object.fromEntries(catalog.map((i) => [i.id, i])), [catalog]);
 
   // Measure follows how the material is stocked: kg items in grams, counted items in units.
@@ -277,9 +299,13 @@ function Formulations({ currentUserRole, showToast, onLock }) {
 
   return (
     <div className="space-y-6 max-w-6xl">
-      <div className="bg-white rounded-2xl shadow-sm border p-4 flex items-center justify-between">
-        <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-xl">Vault Unlocked</span>
-        <div className="flex gap-2">
+      <div className="bg-white rounded-2xl shadow-sm border p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200">Vault Unlocked</span>
+          <span className="text-[11px] text-slate-500">All formulations sorted alphabetically (A–Z)</span>
+        </div>
+        <div className="flex items-center gap-2 no-print">
+          <ExportDropdownMenu onExportExcel={exportCSV} onPrintPDF={() => window.print()} />
           {currentUserRole === 'Administrator' && (
             <button onClick={() => setChangingPasscode(true)} className="px-3.5 py-1.5 text-xs font-bold bg-slate-100 rounded-xl border flex items-center gap-1">
               <KeyRound size={13} /><span>Change Passcode</span>
@@ -373,9 +399,12 @@ function Formulations({ currentUserRole, showToast, onLock }) {
         </Card>
       )}
 
-      <Card title={`Saved Recipes (${recipes.length})`}>
+      <Card
+        title={`Saved Formulations — Alphabetical Order A–Z (${recipes.length})`}
+        actions={<span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">Sorted A &rarr; Z</span>}
+      >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {recipes.map((r) => (
+          {sortedRecipes.map((r) => (
             <div key={r.id} className={`p-4 border rounded-xl space-y-2 ${editingId === r.id ? 'bg-amber-50 border-amber-300' : 'bg-slate-50'}`}>
               <div className="flex justify-between items-center gap-2">
                 <span className="font-bold text-slate-900 text-sm">{r.name}</span>
@@ -389,9 +418,10 @@ function Formulations({ currentUserRole, showToast, onLock }) {
               <div className="text-xs text-slate-600 space-y-1">
                 <div><b>Baking Ingredients:</b> {r.items.length} items ({fmt(r.total_baking_grams, 0)} g total)</div>
                 <div><b>Packaging BOM:</b> {r.packaging.length} items · <b>Scale:</b> {r.scale_basis === 'bin' ? 'per bin' : 'per batch'}</div>
-                <div><b>Estimated Batch Cost:</b> {money(r.cost_per_batch)}</div>
-                <div><b>575g Cost / Mfg Price:</b> {money(r.cost_per_575g)} / {money(r.mfg_price_575g)}</div>
-                <div><b>312g Cost / Mfg Price:</b> {money(r.cost_per_312g)} / {money(r.mfg_price_312g)}</div>
+                <div><b>Estimated Batch Material Cost:</b> {money(r.cost_per_batch)}</div>
+                <div><b>575g Material Cost / Mfg Price:</b> {money(r.cost_per_575g)} / {money(r.mfg_price_575g)}</div>
+                <div><b>312g Material Cost / Mfg Price:</b> {money(r.cost_per_312g)} / {money(r.mfg_price_312g)}</div>
+                <div className="text-[10px] text-slate-400 italic">* Packaging cost calculated upon final production packaging run.</div>
               </div>
             </div>
           ))}
@@ -410,8 +440,7 @@ function CostPreview({ preview }) {
     ['Baking ingredients', money(preview.doughCost)],
     ['Labor', money(preview.labor)],
     ['Wastage buffer', money(preview.wastage)],
-    ['Shared batch packaging', money(preview.sharedMaterialCost)],
-    ['Batch cost', money(preview.totalCost)]
+    ['Batch material cost', money(preview.totalCost)]
   ];
   const formats = [
     ['575g', preview.units575, preview.costPer575g, preview.mfgPrice575g, preview.distPrice575g, preview.retailPrice575g],
@@ -428,7 +457,7 @@ function CostPreview({ preview }) {
       </dl>
       <table className="w-full text-right tabular-nums">
         <thead className="text-[10px] uppercase text-slate-500">
-          <tr><th className="text-left">Format</th><th>Units</th><th>Cost</th><th>Mfg</th><th>Dist</th><th>Retail</th></tr>
+          <tr><th className="text-left">Format</th><th>Units</th><th>Material cost</th><th>Mfg</th><th>Dist</th><th>Retail</th></tr>
         </thead>
         <tbody>
           {formats.map(([f, units, cost, mfg, dist, ret]) => (
@@ -439,6 +468,9 @@ function CostPreview({ preview }) {
           ))}
         </tbody>
       </table>
+      <p className="md:col-span-2 text-[10px] text-slate-400 italic">
+        * Packaging cost is not part of the formulation cost; it is calculated when the final packaging run is saved.
+      </p>
     </div>
   );
 }

@@ -27,25 +27,38 @@ body {
   background: #94a3b8;
 }
 
-/* Print styles for recall dossier */
+/* Print: any page prints cleanly (menus, sidebars and buttons hidden). */
 @media print {
+  html, body, #root, main {
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
   body * {
     visibility: hidden;
   }
 
+  #printable-page-container,
+  #printable-page-container *,
   #printable-audit-area,
   #printable-audit-area * {
     visibility: visible;
   }
 
-  #printable-audit-area {
+  #printable-page-container {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
   }
 
-  #printable-audit-area .no-print {
-    display: none;
+  .no-print,
+  .no-print * {
+    display: none !important;
   }
 }

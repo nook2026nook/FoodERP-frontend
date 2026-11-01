@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Download, Search, Trash2 } from 'lucide-react';
+import { Search, Trash2 } from 'lucide-react';
 import { inventoryAPI, shipmentsAPI, errorMessage } from '../../api/client';
 import { Card, Field, downloadCsv, inputClass, todayIso } from '../ui';
 import QuickBooksPanel from '../QuickBooksPanel';
+import ExportDropdownMenu, { usePageExport } from '../PageExport';
 
 const EDIT_ROLES = ['Administrator', 'Shipping Clerk'];
 const emptyLine = () => ({ product: '', unit_type: 'box', quantity: '', batch_id: '' });
@@ -98,11 +99,13 @@ export default function ShippingView({ currentUserRole, showToast }) {
     downloadCsv(`dispatches_${filters.from || 'all'}_to_${filters.to || todayIso()}.csv`, [
       ['Date', 'Customer', 'Invoice', 'Product', 'Quantity', 'Unit', 'Batches', 'Source', 'Allocation'],
       ...visible.flatMap((s) => s.lines.map((l) => [
-        s.shipped_at, s.customer_name, s.invoice_number, l.product_description, l.quantity, l.unit_type || '',
+        String(s.shipped_at).slice(0, 10), s.customer_name, s.invoice_number, l.product_description, l.quantity, l.unit_type || '',
         l.allocations.map((a) => a.batch_number).join(' '), s.source, l.allocation_status
       ]))
     ]);
   };
+
+  usePageExport(exportCsv);
 
   const remove = async (s) => {
     if (!window.confirm(`Delete shipment ${s.invoice_number} to ${s.customer_name}? Its stock goes back to the batches.`)) return;
@@ -175,15 +178,14 @@ export default function ShippingView({ currentUserRole, showToast }) {
       )}
 
       <Card
-        title={filtered ? `Dispatches (${visible.length} of ${shipments.length})` : `Dispatches (${shipments.length})`}
+        id="printable-audit-area"
+        title={filtered ? `Dispatches & QuickBooks Invoices (${visible.length} of ${shipments.length})` : `Dispatches & QuickBooks Invoices (${shipments.length})`}
         actions={(
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">{qboCount} from QuickBooks</span>
             <span className="px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">{shipments.length - qboCount} manual</span>
             {attentionCount > 0 && <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-700">{attentionCount} need attention</span>}
-            <button type="button" onClick={exportCsv} disabled={!visible.length} className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 border rounded-lg text-slate-700 disabled:opacity-60">
-              <Download size={13} /> Export CSV
-            </button>
+            <ExportDropdownMenu onExportExcel={exportCsv} onPrintPDF={() => window.print()} excelDisabled={!visible.length} />
           </div>
         )}
       >

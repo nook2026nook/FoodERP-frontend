@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Trash2, Pencil, Package, ShieldCheck, ShieldAlert, Ban } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Trash2, Pencil, ShieldCheck, ShieldAlert, Ban } from 'lucide-react';
 import { batchesAPI, recipesAPI, errorMessage } from '../../api/client';
 import { Card, Field, StatusPill, inputClass, fmt, money, qty, todayIso, useDebounced } from '../ui';
+import Icon from '../Icon';
+import ExportDropdownMenu, { downloadCSV, todayStamp, usePageExport } from '../PageExport';
 
 const EDIT_ROLES = ['Administrator', 'Production Operator'];
 const QUALITY_ROLES = ['Administrator', 'Quality Assurance (QA)'];
@@ -32,6 +34,8 @@ export default function ProductionView({ currentUserRole, showToast }) {
   const [batches, setBatches] = useState([]);
   const [packagingBatchId, setPackagingBatchId] = useState('');
   const [bakingPrefill, setBakingPrefill] = useState(null);
+  const pendingCount = batches.filter((b) => PACKAGING_EDITABLE.includes(b.status) && !b.packaged_at).length;
+  const finalCount = batches.filter((b) => PACKAGING_EDITABLE.includes(b.status) && b.packaged_at).length;
 
   const loadBatches = useCallback(async () => {
     try {
@@ -92,7 +96,8 @@ export default function ProductionView({ currentUserRole, showToast }) {
   return (
     <div className="space-y-6 max-w-6xl">
       <div className="flex bg-white p-2 rounded-2xl shadow-sm border border-slate-200 gap-2">
-        {[['baking', '🔥 Baking Screen', 'bg-amber-600'], ['packaging', '📦 Packaging Screen', 'bg-blue-600']].map(([id, label, active]) => (
+        {[['baking', '🌾 1. Baking Screen (Batch #, Bins & Multi-Lot Splits)', 'bg-amber-600'],
+          ['packaging', `📦 2. Packaging & Final Batch Editor (${pendingCount} pending, ${finalCount} final)`, 'bg-blue-600']].map(([id, label, active]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
@@ -137,6 +142,7 @@ export default function ProductionView({ currentUserRole, showToast }) {
         onPackaging={openPackaging}
         onStatus={changeStatus}
         onDelete={removeBatch}
+        showToast={showToast}
       />
     </div>
   );
@@ -343,11 +349,119 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
 // Packaging screen
 // ---------------------------------------------------------------------------
 
-const VARIANCE_STYLE = {
-  Balanced: 'text-emerald-700 bg-emerald-50 border-emerald-200',
-  'Over-Yield': 'text-amber-800 bg-amber-50 border-amber-200',
-  'Scrap / Loss': 'text-rose-700 bg-rose-50 border-rose-200'
+const VARIANCE_TEXT = {
+  Balanced: ['text-emerald-400', 'bg-emerald-950/60 border-emerald-800'],
+  'Over-Yield': ['text-rose-400', 'bg-rose-950/60 border-rose-800'],
+  'Scrap / Loss': ['text-amber-400', 'bg-amber-950/60 border-amber-800']
 };
+
+/** Live yield delta plus the final run-cost reconciliation (material + packaging - wastage). */
+function ReconciliationPanel({ batch, result }) {
+  const [valueTone, boxTone] = VARIANCE_TEXT[result.variance_status] || VARIANCE_TEXT.Balanced;
+  const run = result.run_cost;
+  const delta = result.variance_delta_grams;
+  const cost = result.cost;
+  const packagingRows = [
+    ['Cost of 575g Bags', cost.bag575, `${result.counts.total_bags_575g} bags`],
+    ['Cost of Box 575g', cost.box575, `${result.counts.boxes_575g} boxes`],
+    ['Cost of 312g Bags', cost.bag312, `${result.counts.total_bags_312g} bags`],
+    ['Cost of Box 312g', cost.box312, `${result.counts.boxes_312g} boxes`]
+  ];
+
+  return (
+    <div className="p-5 bg-slate-900 text-white rounded-2xl shadow-md space-y-3">
+      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+        <h4 className="font-bold text-xs uppercase tracking-wider text-amber-400 flex items-center gap-2">
+          <Icon name="Activity" size={16} />
+          Live Packaging Delta &amp; Cost Reconciliation
+        </h4>
+        <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono">
+          Batch: {batch.batch_number} ({fmt(run.multiplier, 2)}x scale / {Number(batch.bins_count)} Bins)
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1 text-xs">
+        <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+          <span className="text-slate-400 text-[10px] uppercase font-bold block">Theoretical Batch Dough:</span>
+          <span className="text-base font-black text-white tabular-nums">{fmt(result.theoretical_dough_grams, 0)} g</span>
+        </div>
+        <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
+          <span className="text-slate-400 text-[10px] uppercase font-bold block">Total Packaged Weight:</span>
+          <span className="text-base font-black text-emerald-400 tabular-nums">{fmt(result.packaged_weight_grams, 0)} g</span>
+        </div>
+        <div className={`p-3 rounded-xl border ${boxTone}`}>
+          <span className="text-slate-400 text-[10px] uppercase font-bold block">Live Variance (Delta):</span>
+          <span className={`text-base font-black font-mono ${valueTone}`}>
+            {delta > 0 ? '+' : ''}{fmt(delta, 0)} g
+            <span className="text-[10px] font-sans ml-1 uppercase block mt-0.5">({result.variance_status})</span>
+          </span>
+        </div>
+      </div>
+
+      <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 mt-2 space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-700 pb-1.5">
+          <span className="text-amber-400 text-[10px] uppercase font-bold tracking-widest flex items-center gap-1.5">
+            <Icon name="Activity" size={13} />
+            Final Run Cost Reconciliation (Material + Final Packaging)
+          </span>
+          <span className="text-slate-400 text-[10px] font-mono">Scaled by {fmt(run.multiplier, 2)} Batches / {Number(batch.bins_count)} Bins</span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+          <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-700/80">
+            <span className="text-slate-400 text-[10px] uppercase font-bold block">1. Gross Material Cost:</span>
+            <span className="text-base font-black text-white font-mono">{money(run.gross_material_cost)}</span>
+            <span className="text-[10px] text-slate-400 block mt-0.5">
+              ({money(run.gross_material_cost / (run.multiplier || 1))}/batch × {fmt(run.multiplier, 2)} batches)
+            </span>
+          </div>
+          <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-700/80">
+            <span className="text-slate-400 text-[10px] uppercase font-bold block">2. Packaging Material Cost:</span>
+            <span className="text-base font-black text-blue-400 font-mono">{money(run.packaging_cost)}</span>
+            <span className="text-[10px] text-slate-400 block mt-0.5">Gross Run (1+2): {money(run.gross_production_cost)}</span>
+          </div>
+          <div className="bg-rose-950/70 p-3 rounded-xl border border-rose-700/80">
+            <span className="text-rose-300 text-[10px] uppercase font-bold block">3. Less Batch Wastage Cost:</span>
+            <span className="text-base font-black text-rose-400 font-mono">-{money(run.wastage_cost)}</span>
+            <span className="text-[10px] text-rose-300/80 block mt-0.5">{run.wastage_percent}% ({fmt(run.wastage_kg, 2)} kg from ingredients)</span>
+          </div>
+          <div className="bg-emerald-950/70 p-3 rounded-xl border border-emerald-700/80">
+            <span className="text-emerald-300 text-[10px] uppercase font-bold block">Net Production Cost (After Wastage):</span>
+            <span className="text-lg font-black text-emerald-400 font-mono">{money(run.net_production_cost)}</span>
+            <span className="text-[10px] text-emerald-300/80 block mt-0.5">
+              {money(run.gross_production_cost)} − {money(run.wastage_cost)} wastage
+            </span>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto pt-1">
+          <table className="w-full text-left text-xs whitespace-nowrap">
+            <thead className="text-slate-400 font-semibold border-b border-slate-700/80">
+              <tr>
+                {packagingRows.map(([label]) => <th key={label} className="pb-1">{label}</th>)}
+                <th className="pb-1 text-emerald-400 font-extrabold text-right">Total Packaging Cost</th>
+              </tr>
+            </thead>
+            <tbody className="text-white font-mono text-sm">
+              <tr>
+                {packagingRows.map(([label, value, note]) => (
+                  <td key={label} className="pt-2">
+                    <div>{money(value)}</div>
+                    <div className="text-[10px] font-sans text-slate-400">{note}</div>
+                  </td>
+                ))}
+                <td className="pt-2 text-emerald-400 font-black text-right text-base">
+                  <div>{money(cost.total)}</div>
+                  {cost.other > 0 && <div className="text-[10px] font-sans text-slate-400">incl. {money(cost.other)} batch materials</div>}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function PackagingScreen({ batches, batchId, setBatchId, canEdit, showToast, onSaved }) {
   const [counts, setCounts] = useState(EMPTY_COUNTS);
@@ -436,30 +550,7 @@ function PackagingScreen({ batches, batchId, setBatchId, canEdit, showToast, onS
             ))}
           </div>
 
-          {result && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className={`p-4 rounded-xl border text-xs space-y-1 ${VARIANCE_STYLE[result.variance_status]}`}>
-                <div className="flex justify-between"><span>Theoretical dough</span><b className="tabular-nums">{fmt(result.theoretical_dough_grams, 0)} g</b></div>
-                <div className="flex justify-between"><span>Packaged weight</span><b className="tabular-nums">{fmt(result.packaged_weight_grams, 0)} g</b></div>
-                <div className="flex justify-between border-t border-current/20 pt-1 text-sm">
-                  <span className="font-bold">Live delta</span>
-                  <b className="tabular-nums">{result.variance_delta_grams > 0 ? '+' : ''}{fmt(result.variance_delta_grams, 0)} g · {result.variance_status}</b>
-                </div>
-                <p className="text-[10px] opacity-80">Within ±50 g counts as balanced.</p>
-              </div>
-              <div className="p-4 rounded-xl border bg-slate-50 text-xs space-y-1">
-                <span className="font-bold uppercase text-[10px] text-slate-500">Actual packaging cost</span>
-                {[['575g bags', result.cost.bag575, result.counts.total_bags_575g, 'bags'], ['575g boxes', result.cost.box575, result.counts.boxes_575g, 'boxes'],
-                  ['312g bags', result.cost.bag312, result.counts.total_bags_312g, 'bags'], ['312g boxes', result.cost.box312, result.counts.boxes_312g, 'boxes'],
-                  ['Batch materials', result.cost.other]].map(([label, cost, n, unit]) => (
-                  <div key={label} className="flex justify-between">
-                    <span>{label}{n !== undefined ? ` (${n} ${unit})` : ''}</span><span className="tabular-nums">{money(cost)}</span>
-                  </div>
-                ))}
-                <div className="flex justify-between font-black border-t pt-1"><span>Total</span><span className="tabular-nums">{money(result.cost.total)}</span></div>
-              </div>
-            </div>
-          )}
+          {result && <ReconciliationPanel batch={batch} result={result} />}
 
           {needed.length > 0 && (
             <div className="space-y-3 bg-blue-50/50 p-4 rounded-xl border">
@@ -487,52 +578,118 @@ function PackagingScreen({ batches, batchId, setBatchId, canEdit, showToast, onS
 // Batch log
 // ---------------------------------------------------------------------------
 
-function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onStatus, onDelete }) {
+function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onStatus, onDelete, showToast }) {
   const iconBtn = 'p-1 rounded hover:bg-slate-100';
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filtered = useMemo(() => {
+    const term = searchTerm.toLowerCase().trim();
+    if (!term) return batches;
+    return batches.filter((b) => [
+      b.batch_number, b.production_date, b.recipe_name, b.status, Number(b.bins_count), Number(b.bins_count) / 2
+    ].some((v) => String(v ?? '').toLowerCase().includes(term)));
+  }, [batches, searchTerm]);
+
+  const exportCSV = () => {
+    const rows = [[
+      'Batch Number', 'Production Date', 'Formulation', 'Bins Count', 'Batches Count', '575g Boxes', '575g Bags', '312g Boxes', '312g Bags',
+      'Gross Material Cost ($)', 'Packaging Cost ($)', 'Gross Production Cost ($)', 'Less Wastage Cost ($)', 'Net Production Cost ($)', 'Status'
+    ]];
+    filtered.forEach((b) => rows.push([
+      b.batch_number, String(b.production_date).slice(0, 10), b.recipe_name, Number(b.bins_count), Number(b.bins_count) / 2,
+      b.boxes_575g ?? 0, b.bags_575g ?? 0, b.boxes_312g ?? 0, b.bags_312g ?? 0,
+      Number(b.gross_material_cost || 0).toFixed(2), Number(b.packaging_cost || 0).toFixed(2), Number(b.gross_production_cost || 0).toFixed(2),
+      Number(b.wastage_cost || 0).toFixed(2), Number(b.net_production_cost || 0).toFixed(2), b.status
+    ]));
+    downloadCSV(`Production_Runs_Packaging_Delta_${todayStamp()}.csv`, rows);
+    showToast('Production Runs & Live Packaging Delta exported to Excel/CSV!');
+  };
+  usePageExport(exportCSV);
+
   return (
-    <Card title={`Production Batch Log (${batches.length})`}>
-      <div className="overflow-x-auto -mx-6">
+    <div id="printable-audit-area" className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+      <div className="px-6 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h4 className="font-bold text-slate-800 text-sm">Production Batches Registry ({filtered.length} of {batches.length})</h4>
+          <p className="text-xs text-slate-500 mt-0.5">Search across batch #, formulation, production date, bin count, and packaging status.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 no-print">
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Search batch #, formulation, date, status..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-64 pl-8 pr-3 py-2 border-2 border-emerald-200 rounded-xl text-xs font-semibold bg-emerald-50/30 focus:bg-white focus:outline-none"
+            />
+            <span className="absolute left-2.5 top-2.5 text-emerald-600"><Icon name="Search" size={14} /></span>
+          </div>
+          <ExportDropdownMenu onExportExcel={exportCSV} onPrintPDF={() => window.print()} />
+        </div>
+      </div>
+      <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
-          <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-y border-slate-200">
+          <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-b border-slate-200">
             <tr>
-              <th className="px-6 py-3">Batch #</th>
-              <th className="px-6 py-3">Recipe</th>
-              <th className="px-6 py-3">Date</th>
-              <th className="px-6 py-3">Bins</th>
-              <th className="px-6 py-3">Status</th>
-              <th className="px-6 py-3 text-right">Packed</th>
-              <th className="px-6 py-3 text-right">Delta</th>
-              <th className="px-6 py-3 text-right">Pkg Cost</th>
-              <th className="px-6 py-3 text-right">Actions</th>
+              <th className="px-4 py-3.5">Batch # &amp; Date</th>
+              <th className="px-4 py-3.5">Formulation (Flavour)</th>
+              <th className="px-4 py-3.5">Bins / Scale</th>
+              <th className="px-4 py-3.5 text-right">Gross Production Cost</th>
+              <th className="px-4 py-3.5 text-right text-rose-600">Less Wastage Total</th>
+              <th className="px-4 py-3.5 text-right text-emerald-700">Net Production Cost</th>
+              <th className="px-4 py-3.5">Packaged Output</th>
+              <th className="px-4 py-3.5">Status</th>
+              <th className="px-4 py-3.5 text-right no-print">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {batches.map((b) => (
+            {filtered.map((b) => (
               <tr key={b.id} className="hover:bg-slate-50">
-                <td className="px-6 py-2.5 font-mono font-bold">{b.batch_number}</td>
-                <td className="px-6 py-2.5">{b.recipe_name}</td>
-                <td className="px-6 py-2.5 whitespace-nowrap">{b.production_date}</td>
-                <td className="px-6 py-2.5 whitespace-nowrap">{Number(b.bins_count)} ({b.scale_basis === 'bin' ? 'per bin' : `${Number(b.bins_count) / 2} batches`})</td>
-                <td className="px-6 py-2.5"><StatusPill status={b.status} /></td>
-                <td className="px-6 py-2.5 text-right tabular-nums whitespace-nowrap">
+                <td className="px-4 py-3">
+                  <div className="font-mono font-bold text-slate-900">{b.batch_number}</div>
+                  <div className="text-[10px] text-slate-400">{String(b.production_date).slice(0, 10)}</div>
+                </td>
+                <td className="px-4 py-3 font-semibold text-slate-800">{b.recipe_name}</td>
+                <td className="px-4 py-3 font-bold text-slate-700 whitespace-nowrap">
+                  {Number(b.bins_count)} bins ({b.scale_basis === 'bin' ? 'per bin' : `${Number(b.bins_count) / 2} batches`})
+                </td>
+                <td className="px-4 py-3 text-right font-mono font-semibold text-slate-700 whitespace-nowrap">
+                  <div>{money(b.gross_production_cost)}</div>
+                  <div className="text-[10px] text-slate-400 font-sans">
+                    Mat: {money(b.gross_material_cost)}{b.packaged_at ? ` + Pkg: ${money(b.packaging_cost)}` : ''}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-right font-mono font-bold text-rose-600 whitespace-nowrap">
+                  <div>-{money(b.wastage_cost)}</div>
+                  <div className="text-[10px] text-rose-400 font-sans">{fmt(b.wastage_kg, 2)} kg ({b.wastage_percent}%)</div>
+                </td>
+                <td className="px-4 py-3 text-right font-mono">
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 font-black text-xs">
+                    {money(b.net_production_cost)}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-[11px] font-mono text-slate-600 whitespace-nowrap">
                   {b.packaged_at ? (
                     <>
-                      <div>575g: {b.boxes_575g} box · {b.bags_575g} bag</div>
-                      <div className="text-slate-500">312g: {b.boxes_312g} box · {b.bags_312g} bag</div>
+                      <div>575g: {b.boxes_575g}bx/{b.bags_575g}bg &bull; 312g: {b.boxes_312g}bx/{b.bags_312g}bg</div>
+                      <div className={`font-sans font-bold ${b.variance_status === 'Balanced' ? 'text-emerald-700' : 'text-rose-600'}`}>
+                        Δ {Number(b.variance_delta_grams) > 0 ? '+' : ''}{fmt(b.variance_delta_grams, 0)} g · {b.variance_status}
+                      </div>
                     </>
-                  ) : '—'}
+                  ) : (
+                    <span className="text-slate-400 italic">Pending Packaging</span>
+                  )}
                 </td>
-                <td className={`px-6 py-2.5 text-right tabular-nums font-bold ${b.variance_status === 'Balanced' ? 'text-emerald-700' : b.variance_status ? 'text-rose-600' : 'text-slate-400'}`}>
-                  {b.packaged_at ? `${Number(b.variance_delta_grams) > 0 ? '+' : ''}${fmt(b.variance_delta_grams, 0)} g` : '—'}
-                </td>
-                <td className="px-6 py-2.5 text-right tabular-nums">{b.packaged_at ? money(b.total_pkg_cost) : '—'}</td>
-                <td className="px-6 py-2.5">
+                <td className="px-4 py-3"><StatusPill status={b.status} /></td>
+                <td className="px-4 py-3 no-print">
                   <div className="flex justify-end gap-1 text-slate-500">
                     {canEdit && BAKING_EDITABLE.includes(b.status) && (
                       <button onClick={() => onEditBaking(b)} className={`${iconBtn} hover:text-amber-700`} title="Edit baking" aria-label={`Edit baking for ${b.batch_number}`}><Pencil size={15} /></button>
                     )}
                     {canEdit && PACKAGING_EDITABLE.includes(b.status) && (
-                      <button onClick={() => onPackaging(b.id)} className={`${iconBtn} hover:text-blue-700`} title={b.packaged_at ? 'Edit packaging' : 'Package'} aria-label={`Packaging for ${b.batch_number}`}><Package size={15} /></button>
+                      <button onClick={() => onPackaging(b.id)} className="px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-lg transition" title={b.packaged_at ? 'Edit packaging' : 'Package'} aria-label={`Packaging for ${b.batch_number}`}>
+                        {b.packaged_at ? 'Edit Pkg' : 'Package'}
+                      </button>
                     )}
                     {canQuality && b.status === 'Completed' && (
                       <button onClick={() => onStatus(b, 'Quality Hold')} className={`${iconBtn} hover:text-rose-700`} title="Quality hold" aria-label={`Hold ${b.batch_number}`}><ShieldAlert size={15} /></button>
@@ -550,12 +707,16 @@ function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onS
                 </td>
               </tr>
             ))}
-            {batches.length === 0 && (
-              <tr><td colSpan={9} className="text-center py-8 text-slate-400">No production batches yet.</td></tr>
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={9} className="text-center py-8 text-slate-400">
+                  {batches.length === 0 ? 'No production batches yet.' : `No production batches found matching "${searchTerm}".`}
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
       </div>
-    </Card>
+    </div>
   );
 }

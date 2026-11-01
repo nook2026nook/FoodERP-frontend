@@ -1,6 +1,8 @@
 import Icon from './Icon';
+import ExportDropdownMenu, { usePageExportContext } from './PageExport';
 
 export default function Header({ activeTab, ingredientSubTab, currentUser, onLogout }) {
+  const { run, has } = usePageExportContext();
   const getTitle = () => {
     if (activeTab === 'dashboard') return 'Plant Operations & Compliance Dashboard';
     if (activeTab === 'ingredients_hub') {
@@ -20,10 +22,11 @@ export default function Header({ activeTab, ingredientSubTab, currentUser, onLog
     if (activeTab === 'recipes') return 'Formulations, Batch Costing & Distributor Margins';
     if (activeTab === 'production') return 'Production Runs & Live Packaging Delta';
     if (activeTab === 'shipping') return 'Shipping & QuickBooks Integration';
-    if (activeTab === 'ready_to_ship') return 'Ready to Ship (Finished Goods Inventory)';
-    if (activeTab === 'reports') return 'Production & Shipping Reports';
+    if (activeTab === 'ready_to_ship') return 'Ready to Ship Inventory (Finished Goods)';
+    if (activeTab === 'reports') return 'Shipping Reports & Dispatches';
     if (activeTab === 'wastage') return 'Wastage, Scrap & Yield Variance Log';
     if (activeTab === 'recall') return 'FSMA Mock Recall Audit Dossier';
+    if (activeTab === 'help') return 'System Help Guide, Tutorial & Standard Operating Procedures (SOP)';
     return '';
   };
 
@@ -35,7 +38,10 @@ export default function Header({ activeTab, ingredientSubTab, currentUser, onLog
         </h2>
       </div>
 
-      <div className="flex items-center space-x-3 flex-shrink-0">
+      <div className="flex items-center space-x-2.5 flex-shrink-0 no-print">
+        {activeTab !== 'help' && (
+          <ExportDropdownMenu onExportExcel={run} excelDisabled={!has} onPrintPDF={() => window.print()} label="Export" />
+        )}
         <div className="flex items-center space-x-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-300">
           <Icon name="UserCheck" size={14} className="text-emerald-600" />
           <div className="text-left hidden sm:block">
