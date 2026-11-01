@@ -117,6 +117,7 @@ export const batchesAPI = {
   packagingRequirements: (id, counts) => api.get(`/batches/${id}/packaging-requirements`, { params: counts }),
   plan: (data) => api.post('/batches/plan', data),
   saveBaking: (data) => api.post('/batches/baking', data),
+  updateBaking: (id, data) => api.put(`/batches/${id}/baking`, data),
   savePackaging: (id, data) => api.put(`/batches/${id}/packaging`, data),
   setStatus: (id, status, note) => api.patch(`/batches/${id}/status`, { status, note }),
   delete: (id) => api.delete(`/batches/${id}`)

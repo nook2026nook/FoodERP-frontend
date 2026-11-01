@@ -34,6 +34,7 @@ export default function ProductionView({ currentUserRole, showToast }) {
   const [batches, setBatches] = useState([]);
   const [packagingBatchId, setPackagingBatchId] = useState('');
   const [bakingPrefill, setBakingPrefill] = useState(null);
+  const [bakingFormKey, setBakingFormKey] = useState(0);
   const pendingCount = batches.filter((b) => PACKAGING_EDITABLE.includes(b.status) && !b.packaged_at).length;
   const finalCount = batches.filter((b) => PACKAGING_EDITABLE.includes(b.status) && b.packaged_at).length;
 
@@ -110,13 +111,14 @@ export default function ProductionView({ currentUserRole, showToast }) {
 
       {tab === 'baking' && (
         <BakingScreen
-          key={bakingPrefill?.key || 'new'}
+          key={bakingPrefill?.key || bakingFormKey}
           prefill={bakingPrefill}
           recipes={recipes}
           canEdit={canEdit}
           showToast={showToast}
           onSaved={async (batch, goToPackaging) => {
             setBakingPrefill(null);
+            setBakingFormKey((key) => key + 1);
             await loadBatches();
             if (goToPackaging) openPackaging(batch.id);
           }}
@@ -251,7 +253,10 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
     if (!validateBase()) return;
     setSaving(true);
     try {
-      const { data } = await batchesAPI.saveBaking({ ...base(), splits: splitsPayload(splits) });
+      const payload = { ...base(), splits: splitsPayload(splits) };
+      const { data } = prefill
+        ? await batchesAPI.updateBaking(prefill.id, payload)
+        : await batchesAPI.saveBaking(payload);
       showToast(`Baking batch #${data.batch_number} saved`);
       await onSaved(data, goToPackaging);
     } catch (e) {
