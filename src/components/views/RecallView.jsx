@@ -127,12 +127,16 @@ function RecallDossier({ showToast }) {
 
           {dossier.mode === 'batch' && (
             <>
-              <Card title="Batch">
-                <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
-                  <span><b>{dossier.batch.batch_number}</b> · {dossier.batch.recipe_name}</span>
-                  <span>Produced {dossier.batch.production_date}</span>
-                  <span>{Number(dossier.batch.bins_count)} bins</span>
-                  <StatusPill status={dossier.batch.status} />
+              <Card title={`Production items (${dossier.batches.length})`}>
+                <div className="space-y-3">
+                  {dossier.batches.map((batch) => (
+                    <div key={batch.id} className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
+                      <span><b>{batch.batch_number}</b> · {batch.recipe_name}</span>
+                      <span>Produced {batch.production_date}</span>
+                      <span>{Number(batch.bins_count)} bins</span>
+                      <StatusPill status={batch.status} />
+                    </div>
+                  ))}
                 </div>
               </Card>
               <Card title={`Upstream lots used (${dossier.upstream_lots.length})`}>

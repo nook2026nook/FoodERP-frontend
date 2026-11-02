@@ -215,13 +215,13 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
   const recipe = recipes.find((r) => r.id === recipeId);
   const basis = basisOverride || recipe?.scale_basis || 'batch';
   const binsNum = parseFloat(bins) || 0;
-  const query = useDebounced(JSON.stringify({ recipeId, binsNum, basis, batchNumber: batchNumber.trim() }));
+  const query = useDebounced(JSON.stringify({ recipeId, binsNum, basis, batchId: prefill?.id }));
 
   useEffect(() => {
     const q = JSON.parse(query);
     if (!q.recipeId || !(q.binsNum > 0)) { setReqs(null); setSplits({}); return; }
     batchesAPI.bakingRequirements({
-      recipe_id: q.recipeId, bins_count: q.binsNum, scale_basis: q.basis, batch_number: q.batchNumber || undefined
+      recipe_id: q.recipeId, bins_count: q.binsNum, scale_basis: q.basis, batch_id: q.batchId || undefined
     })
       .then(({ data }) => { setReqs(data); setSplits(splitsFromSuggestions(data.requirements)); setReqError(''); })
       .catch((e) => { setReqs(null); setReqError(errorMessage(e, 'Could not calculate ingredient needs')); });
@@ -290,6 +290,7 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
               <button type="button" onClick={generateNumber} className="px-3 text-[11px] font-bold bg-slate-100 border rounded-lg whitespace-nowrap">Auto</button>
             )}
           </div>
+          {!prefill && <p className="mt-1 text-[10px] text-slate-500">Save each formulation separately under the same batch number.</p>}
         </Field>
         <Field label="Production Date" htmlFor="bk-date">
           <input id="bk-date" type="date" value={productionDate} onChange={(e) => setProductionDate(e.target.value)} className={inputClass} disabled={!canEdit} />
