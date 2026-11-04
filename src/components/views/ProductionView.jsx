@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, Pencil, ShieldCheck, ShieldAlert, Ban } from 'lucide-react';
 import { batchesAPI, recipesAPI, errorMessage } from '../../api/client';
 import { Card, Field, StatusPill, inputClass, fmt, money, qty, todayIso, useDebounced } from '../ui';
@@ -11,8 +11,6 @@ const BAKING_EDITABLE = ['Planned', 'In Production', 'Completed', 'Quality Hold'
 const PACKAGING_EDITABLE = ['In Production', 'Completed', 'Quality Hold'];
 const CANCELLABLE = ['Planned', 'In Production', 'Completed', 'Quality Hold'];
 const EMPTY_COUNTS = { boxes_575g: '', bags_575g: '', boxes_312g: '', bags_312g: '' };
-
-const multiplierFor = (basis, bins) => (basis === 'bin' ? bins : bins / 2);
 
 /** {item_id: [{lot_id, quantity}]} from the server's suggested FIFO splits. */
 const splitsFromSuggestions = (requirements) => Object.fromEntries(
@@ -54,16 +52,28 @@ export default function ProductionView({ currentUserRole, showToast }) {
     loadBatches();
   }, [loadBatches, showToast]);
 
-  const openPackaging = (batchId) => {
-    setPackagingBatchId(batchId);
+  const openPackaging = (batchNumber) => {
+    setPackagingBatchId(batchNumber);
     setTab('packaging');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const editBaking = (batch) => {
-    setBakingPrefill({ ...batch, key: Date.now() });
-    setTab('baking');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  const editBaking = async (batch) => {
+    try {
+      const group = batches.filter((item) => item.batch_number === batch.batch_number);
+      const runs = await Promise.all(group.map(async (item) => (await batchesAPI.getById(item.id)).data));
+      setBakingPrefill({
+        batch_number: batch.batch_number,
+        production_date: batch.production_date,
+        baking_employees: batch.baking_employees || [],
+        runs,
+        key: Date.now()
+      });
+      setTab('baking');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+      showToast(errorMessage(e, 'Failed to load batch group'), 'error');
+    }
   };
 
   const changeStatus = async (batch, status) => {
@@ -87,7 +97,7 @@ export default function ProductionView({ currentUserRole, showToast }) {
     try {
       await batchesAPI.delete(batch.id);
       showToast(`Batch ${batch.batch_number} deleted; inventory refunded`);
-      if (packagingBatchId === batch.id) setPackagingBatchId('');
+      if (packagingBatchId === batch.batch_number) setPackagingBatchId('');
       await loadBatches();
     } catch (e) {
       showToast(errorMessage(e, 'Failed to delete batch'), 'error');
@@ -95,7 +105,7 @@ export default function ProductionView({ currentUserRole, showToast }) {
   };
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <div className="space-y-6 max-w-7xl">
       <div className="flex bg-white p-2 rounded-2xl shadow-sm border border-slate-200 gap-2">
         {[['baking', '🌾 1. Baking Screen (Batch #, Bins & Multi-Lot Splits)', 'bg-amber-600'],
           ['packaging', `📦 2. Packaging & Final Batch Editor (${pendingCount} pending, ${finalCount} final)`, 'bg-blue-600']].map(([id, label, active]) => (
@@ -120,7 +130,7 @@ export default function ProductionView({ currentUserRole, showToast }) {
             setBakingPrefill(null);
             setBakingFormKey((key) => key + 1);
             await loadBatches();
-            if (goToPackaging) openPackaging(batch.id);
+            if (goToPackaging) openPackaging(batch.batch_number);
           }}
         />
       )}
@@ -128,8 +138,8 @@ export default function ProductionView({ currentUserRole, showToast }) {
       {tab === 'packaging' && (
         <PackagingScreen
           batches={batches}
-          batchId={packagingBatchId}
-          setBatchId={setPackagingBatchId}
+          batchNumber={packagingBatchId}
+          setBatchNumber={setPackagingBatchId}
           canEdit={canEdit}
           showToast={showToast}
           onSaved={loadBatches}
@@ -201,31 +211,147 @@ function SplitEditor({ requirement, rows, onChange, disabled }) {
 // Baking screen
 // ---------------------------------------------------------------------------
 
-function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
-  const [batchNumber, setBatchNumber] = useState(prefill?.batch_number || '');
-  const [productionDate, setProductionDate] = useState(prefill?.production_date || todayIso());
-  const [recipeId, setRecipeId] = useState(prefill?.recipe_id || '');
-  const [bins, setBins] = useState(prefill ? String(Number(prefill.bins_count)) : '40');
-  const [basisOverride, setBasisOverride] = useState(prefill?.scale_basis || '');
-  const [reqs, setReqs] = useState(null);
-  const [reqError, setReqError] = useState('');
-  const [splits, setSplits] = useState({});
-  const [saving, setSaving] = useState(false);
+const employeesFor = (values = []) => [...values.slice(0, 4), '', '', '', ''].slice(0, 4);
 
-  const recipe = recipes.find((r) => r.id === recipeId);
-  const basis = basisOverride || recipe?.scale_basis || 'batch';
-  const binsNum = parseFloat(bins) || 0;
-  const query = useDebounced(JSON.stringify({ recipeId, binsNum, basis, batchId: prefill?.id }));
+function splitsFromAllocations(allocations = []) {
+  return allocations.reduce((result, allocation) => {
+    const rows = result[allocation.item_id] || [];
+    rows.push({ lot_id: allocation.lot_id, quantity: String(allocation.quantity) });
+    result[allocation.item_id] = rows;
+    return result;
+  }, {});
+}
+
+function bakingRunFrom(batch) {
+  const totalBins = Number(batch.bins_count) || 40;
+  return {
+    key: batch.id || `new-${Date.now()}-${Math.random()}`,
+    id: batch.id,
+    recipe_id: batch.recipe_id || '',
+    bins_large: String(batch.bins_large_count ?? Math.floor(totalBins / 2)),
+    bins_small: String(batch.bins_small_count ?? Math.ceil(totalBins / 2)),
+    scale_basis: batch.scale_basis || '',
+    splits: splitsFromAllocations(batch.baking_allocations),
+    requirementsReady: false
+  };
+}
+
+function BakingRunEditor({ row, recipes, selectedRecipeIds, canEdit, onChange, onRemove }) {
+  const [requirements, setRequirements] = useState(null);
+  const [reqError, setReqError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const recipe = recipes.find((item) => item.id === row.recipe_id);
+  const bins = (parseFloat(row.bins_large) || 0) + (parseFloat(row.bins_small) || 0);
+  const basis = row.scale_basis || recipe?.scale_basis || 'batch';
+  const requestSignature = JSON.stringify({ recipeId: row.recipe_id, bins, basis, batchId: row.id });
+  const latestSignature = useRef(requestSignature);
+  latestSignature.current = requestSignature;
+  const query = useDebounced(requestSignature, 250);
 
   useEffect(() => {
     const q = JSON.parse(query);
-    if (!q.recipeId || !(q.binsNum > 0)) { setReqs(null); setSplits({}); return; }
+    if (!q.recipeId || !(q.bins > 0)) {
+      setRequirements(null);
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
     batchesAPI.bakingRequirements({
-      recipe_id: q.recipeId, bins_count: q.binsNum, scale_basis: q.basis, batch_id: q.batchId || undefined
+      recipe_id: q.recipeId, bins_count: q.bins, scale_basis: q.basis, batch_id: q.batchId || undefined
     })
-      .then(({ data }) => { setReqs(data); setSplits(splitsFromSuggestions(data.requirements)); setReqError(''); })
-      .catch((e) => { setReqs(null); setReqError(errorMessage(e, 'Could not calculate ingredient needs')); });
+      .then(({ data }) => {
+        if (!active || latestSignature.current !== query) return;
+        setRequirements(data);
+        setReqError('');
+        onChange((current) => ({
+          ...current,
+          requirementsReady: true,
+          splits: Object.keys(current.splits || {}).length ? current.splits : splitsFromSuggestions(data.requirements)
+        }));
+      })
+      .catch((e) => {
+        if (!active || latestSignature.current !== query) return;
+        setRequirements(null);
+        onChange((current) => ({ ...current, requirementsReady: false }));
+        setReqError(errorMessage(e, 'Could not calculate ingredient needs'));
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [query]);
+
+  const updateSplit = (itemId, splits) => onChange({
+    ...row, splits: { ...row.splits, [itemId]: splits }
+  });
+  const updateBins = (field, value) => onChange({ ...row, [field]: value, splits: {}, requirementsReady: false });
+
+  return (
+    <tr className="align-top even:bg-amber-50/30">
+      <td className="min-w-52 border-r p-3">
+        <select
+          aria-label="Flavor"
+          value={row.recipe_id}
+          onChange={(e) => onChange({ ...row, recipe_id: e.target.value, scale_basis: '', splits: {}, requirementsReady: false })}
+          className={`${inputClass} min-w-48 font-semibold`}
+          disabled={!canEdit}
+        >
+          <option value="">Select flavor…</option>
+          {recipes.map((item) => (
+            <option key={item.id} value={item.id} disabled={item.id !== row.recipe_id && selectedRecipeIds.has(item.id)}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+        {row.recipe_id && <div className="mt-1 text-[10px] text-slate-500">Scale: {basis === 'bin' ? 'per bin' : 'per 2-bin batch'}</div>}
+        <button type="button" onClick={onRemove} disabled={!canEdit} className="mt-2 text-[11px] font-bold text-rose-600 disabled:opacity-50">
+          Remove flavor
+        </button>
+      </td>
+      <td className="min-w-[30rem] border-r p-3">
+        {reqError && <p className="text-xs font-bold text-rose-600">{reqError}</p>}
+        {loading && <p className="text-xs text-slate-500">Calculating ingredient needs…</p>}
+        {requirements?.requirements.map((requirement) => (
+          <div key={requirement.item_id} className="mb-2 last:mb-0">
+            <SplitEditor
+              requirement={requirement}
+              rows={row.splits[requirement.item_id] || []}
+              onChange={(splits) => updateSplit(requirement.item_id, splits)}
+              disabled={!canEdit}
+            />
+          </div>
+        ))}
+        {requirements && <div className="mt-2 text-right text-[11px] font-bold text-slate-600">
+          Dough: {fmt(requirements.theoretical_dough_grams / 1000, 2)} kg
+        </div>}
+      </td>
+      <td className="w-36 border-r bg-indigo-50/30 p-3">
+        <input aria-label="Bins for 575g products" type="number" step="any" min="0" value={row.bins_large}
+          onChange={(e) => updateBins('bins_large', e.target.value)} className={`${inputClass} text-center font-bold`} disabled={!canEdit} />
+        <span className="mt-1 block text-center text-[10px] text-indigo-800">575g products</span>
+      </td>
+      <td className="w-36 border-r bg-emerald-50/30 p-3">
+        <input aria-label="Bins for 312g products" type="number" step="any" min="0" value={row.bins_small}
+          onChange={(e) => updateBins('bins_small', e.target.value)} className={`${inputClass} text-center font-bold`} disabled={!canEdit} />
+        <span className="mt-1 block text-center text-[10px] text-emerald-800">312g products</span>
+      </td>
+    </tr>
+  );
+}
+
+function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
+  const [batchNumber, setBatchNumber] = useState(prefill?.batch_number || '');
+  const [productionDate, setProductionDate] = useState(prefill?.production_date || todayIso());
+  const [employees, setEmployees] = useState(() => employeesFor(prefill?.baking_employees || []));
+  const [runs, setRuns] = useState(() => prefill?.runs?.length
+    ? prefill.runs.map(bakingRunFrom)
+    : [bakingRunFrom({})]);
+  const [saving, setSaving] = useState(false);
+
+  const selectedRecipeIds = new Set(runs.map((run) => run.recipe_id).filter(Boolean));
+  const updateRun = (index, next) => setRuns((current) => current.map((run, i) => (
+    i === index ? (typeof next === 'function' ? next(run) : next) : run
+  )));
+  const updateEmployee = (index, value) => setEmployees((current) => current.map((name, i) => (i === index ? value : name)));
 
   const generateNumber = () => {
     const dateCode = productionDate.replace(/-/g, '').slice(2);
@@ -234,30 +360,35 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
     showToast(`Auto-generated Batch #${generated}`);
   };
 
-  const base = () => ({
-    batch_number: batchNumber.trim(),
-    recipe_id: recipeId,
-    production_date: productionDate,
-    bins_count: binsNum,
-    scale_basis: basis
-  });
-
-  const validateBase = () => {
-    if (!batchNumber.trim()) { showToast('Enter a production batch number', 'error'); return false; }
-    if (!recipeId) { showToast('Select a target formulation', 'error'); return false; }
-    if (!(binsNum > 0)) { showToast('Enter the number of bins', 'error'); return false; }
-    return true;
-  };
-
+  const validEmployees = employees.map((name) => name.trim()).filter(Boolean);
   const save = async (goToPackaging) => {
-    if (!validateBase()) return;
+    if (!batchNumber.trim()) { showToast('Enter a production batch number', 'error'); return; }
+    if (!validEmployees.length) { showToast('Enter at least one employee name', 'error'); return; }
+    if (!runs.length || runs.some((run) => !run.recipe_id)) { showToast('Select a flavor for every row', 'error'); return; }
+    if (runs.some((run) => !run.requirementsReady)) { showToast('Wait for ingredient requirements to finish loading', 'error'); return; }
+    if (new Set(runs.map((run) => run.recipe_id)).size !== runs.length) {
+      showToast('Each flavor can only be listed once under a batch number', 'error'); return;
+    }
+    if (runs.some((run) => (parseFloat(run.bins_large) || 0) + (parseFloat(run.bins_small) || 0) <= 0)) {
+      showToast('Enter at least one bin for every flavor', 'error'); return;
+    }
     setSaving(true);
     try {
-      const payload = { ...base(), splits: splitsPayload(splits) };
-      const { data } = prefill
-        ? await batchesAPI.updateBaking(prefill.id, payload)
-        : await batchesAPI.saveBaking(payload);
-      showToast(`Baking batch #${data.batch_number} saved`);
+      const { data } = await batchesAPI.saveBakingGroup({
+        batch_number: batchNumber.trim(),
+        original_batch_number: prefill?.batch_number,
+        production_date: productionDate,
+        baking_employees: validEmployees,
+        runs: runs.map((run) => ({
+          id: run.id,
+          recipe_id: run.recipe_id,
+          bins_large: parseFloat(run.bins_large) || 0,
+          bins_small: parseFloat(run.bins_small) || 0,
+          scale_basis: run.scale_basis || recipes.find((recipe) => recipe.id === run.recipe_id)?.scale_basis || 'batch',
+          splits: splitsPayload(run.splits)
+        }))
+      });
+      showToast(`Batch #${data.batch_number} saved with ${data.runs.length} flavor(s)`);
       await onSaved(data, goToPackaging);
     } catch (e) {
       showToast(errorMessage(e, 'Failed to save baking batch'), 'error');
@@ -267,12 +398,20 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
   };
 
   const plan = async () => {
-    if (!validateBase()) return;
+    if (!batchNumber.trim()) { showToast('Enter a production batch number', 'error'); return; }
+    if (runs.length !== 1 || !runs[0].recipe_id) { showToast('Reserve as Planned requires exactly one selected flavor', 'error'); return; }
+    const binsCount = (parseFloat(runs[0].bins_large) || 0) + (parseFloat(runs[0].bins_small) || 0);
     setSaving(true);
     try {
-      const { data } = await batchesAPI.plan(base());
+      const { data } = await batchesAPI.plan({
+        batch_number: batchNumber.trim(),
+        recipe_id: runs[0].recipe_id,
+        production_date: productionDate,
+        bins_count: binsCount,
+        scale_basis: runs[0].scale_basis || recipes.find((recipe) => recipe.id === runs[0].recipe_id)?.scale_basis || 'batch'
+      });
       showToast(`Batch #${data.batch_number} reserved as Planned`);
-      await onSaved(data, false);
+      await onSaved({ batch_number: data.batch_number }, false);
     } catch (e) {
       showToast(errorMessage(e, 'Failed to plan batch'), 'error');
     } finally {
@@ -281,73 +420,71 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
   };
 
   return (
-    <Card title={prefill ? `Edit Baking — Batch ${prefill.batch_number}` : 'Baking Batch Entry'}>
-      <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-        <Field label="Production Batch # *" htmlFor="bk-number" className="sm:col-span-2">
-          <div className="flex gap-2">
-            <input id="bk-number" value={batchNumber} onChange={(e) => setBatchNumber(e.target.value)} className={`${inputClass} font-mono`} maxLength={100} disabled={!canEdit || Boolean(prefill)} />
-            {canEdit && !prefill && (
-              <button type="button" onClick={generateNumber} className="px-3 text-[11px] font-bold bg-slate-100 border rounded-lg whitespace-nowrap">Auto</button>
-            )}
-          </div>
-          {!prefill && <p className="mt-1 text-[10px] text-slate-500">Save each formulation separately under the same batch number.</p>}
-        </Field>
-        <Field label="Production Date" htmlFor="bk-date">
-          <input id="bk-date" type="date" value={productionDate} onChange={(e) => setProductionDate(e.target.value)} className={inputClass} disabled={!canEdit} />
-        </Field>
-        <Field label="Target Formulation *" htmlFor="bk-recipe" className="sm:col-span-2">
-          <select id="bk-recipe" value={recipeId} onChange={(e) => setRecipeId(e.target.value)} className={inputClass} disabled={!canEdit}>
-            <option value="">Select recipe…</option>
-            {recipes.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-          </select>
-        </Field>
-        <Field label="Dough Bins" htmlFor="bk-bins">
-          <input id="bk-bins" type="number" step="any" min="0.5" value={bins} onChange={(e) => setBins(e.target.value)} className={`${inputClass} font-bold`} disabled={!canEdit} />
-        </Field>
-        <Field label="Scale" htmlFor="bk-basis" className="sm:col-span-2">
-          <select id="bk-basis" value={basisOverride} onChange={(e) => setBasisOverride(e.target.value)} className={inputClass} disabled={!canEdit}>
-            <option value="">Recipe default ({recipe?.scale_basis === 'bin' ? 'per bin' : 'per batch'})</option>
-            <option value="batch">Per commercial batch (2 bins)</option>
-            <option value="bin">Per single dough bin</option>
-          </select>
-        </Field>
-        <div className="sm:col-span-2 flex items-end text-xs text-slate-600">
-          <span>
-            Scale: <b>{fmt(multiplierFor(basis, binsNum), 2)}×</b> recipe
-            {reqs && <> · Theoretical dough <b>{fmt(reqs.theoretical_dough_grams / 1000, 2)} kg</b></>}
-          </span>
-        </div>
+    <form onSubmit={(e) => { e.preventDefault(); save(false); }} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-600 px-6 py-3.5 text-white">
+        <h3 className="text-sm font-black uppercase tracking-wide">{prefill ? `Edit Baking Batch #${prefill.batch_number}` : 'Production Baking Screen'}</h3>
+        {prefill && <button type="button" onClick={() => onSaved(null, false)} className="rounded-lg bg-white px-3 py-1 text-xs font-bold text-amber-900">Cancel edit</button>}
       </div>
-
-      {reqError && <p className="text-xs font-bold text-rose-600">{reqError}</p>}
-
-      {reqs && (
-        <div className="space-y-3 bg-amber-50/50 p-4 rounded-xl border">
-          <span className="text-xs font-bold text-amber-900 uppercase">Ingredient lots (oldest first)</span>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {reqs.requirements.map((r) => (
-              <SplitEditor
-                key={r.item_id}
-                requirement={r}
-                rows={splits[r.item_id] || []}
-                onChange={(rows) => setSplits((s) => ({ ...s, [r.item_id]: rows }))}
-                disabled={!canEdit}
-              />
+      <div className="space-y-4 border-b border-amber-200 bg-amber-50/70 p-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Field label="Batch # *" htmlFor="bk-number">
+            <div className="flex gap-2">
+              <input id="bk-number" value={batchNumber} onChange={(e) => setBatchNumber(e.target.value)} className={`${inputClass} font-mono font-bold`} maxLength={100} disabled={!canEdit} required />
+              {canEdit && <button type="button" onClick={generateNumber} className="whitespace-nowrap rounded-lg border bg-white px-3 text-xs font-bold">Auto-generate</button>}
+            </div>
+          </Field>
+          <Field label="Production date *" htmlFor="bk-date">
+            <input id="bk-date" type="date" value={productionDate} onChange={(e) => setProductionDate(e.target.value)} className={inputClass} disabled={!canEdit} required />
+          </Field>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-extrabold uppercase text-amber-950">Employees who worked on this batch *</label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
+            {employees.map((name, index) => (
+              <input key={index} value={name} onChange={(e) => updateEmployee(index, e.target.value)}
+                placeholder={`Employee ${index + 1}${index === 0 ? ' *' : ''}`} className={inputClass} disabled={!canEdit} />
             ))}
           </div>
         </div>
-      )}
-
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead className="bg-slate-900 text-[10px] font-extrabold uppercase text-white">
+            <tr>
+              <th className="border-r border-slate-700 px-4 py-3">Flavor / formulation</th>
+              <th className="border-r border-slate-700 px-4 py-3">Ingredients and lot splits</th>
+              <th className="border-r border-slate-700 px-4 py-3 text-center">Bins for 575g</th>
+              <th className="px-4 py-3 text-center">Bins for 312g</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200">
+            {runs.map((run, index) => (
+              <BakingRunEditor
+                key={run.key}
+                row={run}
+                recipes={recipes}
+                selectedRecipeIds={selectedRecipeIds}
+                canEdit={canEdit}
+                onChange={(next) => updateRun(index, next)}
+                onRemove={() => setRuns((current) => current.filter((_, i) => i !== index))}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
       {canEdit && (
-        <div className="flex flex-wrap gap-2">
-          <button type="button" disabled={saving || !reqs} onClick={() => save(false)} className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold disabled:opacity-50">Save Baking Batch</button>
-          <button type="button" disabled={saving || !reqs} onClick={() => save(true)} className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold disabled:opacity-50">Save &amp; Go to Packaging</button>
-          {!prefill && (
-            <button type="button" disabled={saving} onClick={plan} className="px-4 py-2.5 bg-slate-100 border rounded-lg text-xs font-bold disabled:opacity-50">Reserve as Planned</button>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-slate-50 p-4">
+          <button type="button" onClick={() => setRuns((current) => [...current, bakingRunFrom({})])} className="rounded-xl border border-amber-300 bg-amber-100 px-4 py-2.5 text-xs font-extrabold text-amber-950">
+            + Add another flavor
+          </button>
+          <div className="flex flex-wrap gap-2">
+            {!prefill && <button type="button" disabled={saving} onClick={plan} className="rounded-lg border bg-white px-4 py-2.5 text-xs font-bold disabled:opacity-50">Reserve as Planned</button>}
+            <button type="button" disabled={saving || runs.some((run) => !run.recipe_id || !run.requirementsReady)} onClick={() => save(false)} className="rounded-xl bg-amber-600 px-5 py-2.5 text-xs font-extrabold text-white disabled:opacity-50">Save Baking Batch</button>
+            <button type="button" disabled={saving || runs.some((run) => !run.recipe_id || !run.requirementsReady)} onClick={() => save(true)} className="rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-extrabold text-white disabled:opacity-50">Save &amp; Go to Packaging</button>
+          </div>
         </div>
       )}
-    </Card>
+    </form>
   );
 }
 
@@ -355,158 +492,203 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
 // Packaging screen
 // ---------------------------------------------------------------------------
 
-const VARIANCE_TEXT = {
-  Balanced: ['text-emerald-400', 'bg-emerald-950/60 border-emerald-800'],
-  'Over-Yield': ['text-rose-400', 'bg-rose-950/60 border-rose-800'],
-  'Scrap / Loss': ['text-amber-400', 'bg-amber-950/60 border-amber-800']
-};
+function packagingRunFrom(batch) {
+  return {
+    batch_id: batch.id,
+    recipe_name: batch.recipe_name,
+    bins_count: batch.bins_count,
+    status: batch.status,
+    boxes_575g: String(batch.boxes_575g ?? 0),
+    bags_575g: String(batch.bags_575g ?? 0),
+    boxes_312g: String(batch.boxes_312g ?? 0),
+    bags_312g: String(batch.bags_312g ?? 0),
+    splits: {},
+    result: null
+  };
+}
 
-/** Live yield delta plus the final run-cost reconciliation (material + packaging - wastage). */
-function ReconciliationPanel({ batch, result }) {
-  const [valueTone, boxTone] = VARIANCE_TEXT[result.variance_status] || VARIANCE_TEXT.Balanced;
-  const run = result.run_cost;
-  const delta = result.variance_delta_grams;
-  const cost = result.cost;
-  const packagingRows = [
-    ['Cost of 575g Bags', cost.bag575, `${result.counts.total_bags_575g} bags`],
-    ['Cost of Box 575g', cost.box575, `${result.counts.boxes_575g} boxes`],
-    ['Cost of 312g Bags', cost.bag312, `${result.counts.total_bags_312g} bags`],
-    ['Cost of Box 312g', cost.box312, `${result.counts.boxes_312g} boxes`]
-  ];
+function PackagingRunEditor({ row, onChange, canEdit }) {
+  const [error, setError] = useState('');
+  const counts = Object.fromEntries(Object.entries(EMPTY_COUNTS).map(([key]) =>
+    [key, Math.max(0, parseInt(row[key], 10) || 0)]));
+  const requestSignature = JSON.stringify({ id: row.batch_id, ...counts });
+  const latestSignature = useRef(requestSignature);
+  latestSignature.current = requestSignature;
+  const query = useDebounced(requestSignature, 250);
+
+  useEffect(() => {
+    const { id, ...queryCounts } = JSON.parse(query);
+    if (!id) return;
+    let active = true;
+    batchesAPI.packagingRequirements(id, queryCounts)
+      .then(({ data }) => {
+        if (!active || latestSignature.current !== query) return;
+        setError('');
+        onChange((current) => ({
+          ...current,
+          result: data,
+          splits: Object.keys(current.splits || {}).length
+            ? current.splits
+            : splitsFromSuggestions(data.requirements.filter((requirement) => requirement.required > 0))
+        }));
+      })
+      .catch((e) => { if (active && latestSignature.current === query) setError(errorMessage(e, 'Could not calculate packaging')); });
+    return () => { active = false; };
+  }, [query]);
+
+  const setCount = (field, value) => onChange({
+    ...row, [field]: value, result: null, splits: {}
+  });
+  const requirements = row.result?.requirements.filter((requirement) => requirement.required > 0) || [];
 
   return (
-    <div className="p-5 bg-slate-900 text-white rounded-2xl shadow-md space-y-3">
-      <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-        <h4 className="font-bold text-xs uppercase tracking-wider text-amber-400 flex items-center gap-2">
-          <Icon name="Activity" size={16} />
-          Live Packaging Delta &amp; Cost Reconciliation
-        </h4>
-        <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono">
-          Batch: {batch.batch_number} ({fmt(run.multiplier, 2)}x scale / {Number(batch.bins_count)} Bins)
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1 text-xs">
-        <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
-          <span className="text-slate-400 text-[10px] uppercase font-bold block">Theoretical Batch Dough:</span>
-          <span className="text-base font-black text-white tabular-nums">{fmt(result.theoretical_dough_grams, 0)} g</span>
-        </div>
-        <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
-          <span className="text-slate-400 text-[10px] uppercase font-bold block">Total Packaged Weight:</span>
-          <span className="text-base font-black text-emerald-400 tabular-nums">{fmt(result.packaged_weight_grams, 0)} g</span>
-        </div>
-        <div className={`p-3 rounded-xl border ${boxTone}`}>
-          <span className="text-slate-400 text-[10px] uppercase font-bold block">Live Variance (Delta):</span>
-          <span className={`text-base font-black font-mono ${valueTone}`}>
-            {delta > 0 ? '+' : ''}{fmt(delta, 0)} g
-            <span className="text-[10px] font-sans ml-1 uppercase block mt-0.5">({result.variance_status})</span>
-          </span>
-        </div>
-      </div>
-
-      <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 mt-2 space-y-3">
-        <div className="flex items-center justify-between border-b border-slate-700 pb-1.5">
-          <span className="text-amber-400 text-[10px] uppercase font-bold tracking-widest flex items-center gap-1.5">
-            <Icon name="Activity" size={13} />
-            Final Run Cost Reconciliation (Material + Final Packaging)
-          </span>
-          <span className="text-slate-400 text-[10px] font-mono">Scaled by {fmt(run.multiplier, 2)} Batches / {Number(batch.bins_count)} Bins</span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
-          <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-700/80">
-            <span className="text-slate-400 text-[10px] uppercase font-bold block">1. Gross Material Cost:</span>
-            <span className="text-base font-black text-white font-mono">{money(run.gross_material_cost)}</span>
-            <span className="text-[10px] text-slate-400 block mt-0.5">
-              ({money(run.gross_material_cost / (run.multiplier || 1))}/batch × {fmt(run.multiplier, 2)} batches)
-            </span>
+    <tr className="align-top even:bg-blue-50/30">
+      <td className="min-w-52 border-r p-3">
+        <div className="font-extrabold text-slate-900">{row.recipe_name}</div>
+        <div className="mt-1 text-[11px] text-slate-600">{Number(row.bins_count)} bins · {row.status}</div>
+      </td>
+      <td className="min-w-[30rem] border-r p-3">
+        {error && <p className="mb-2 text-xs font-bold text-rose-600">{error}</p>}
+        {requirements.map((requirement) => (
+          <div key={requirement.item_id} className="mb-2 last:mb-0">
+            <SplitEditor
+              requirement={requirement}
+              rows={row.splits[requirement.item_id] || []}
+              onChange={(splits) => onChange({ ...row, splits: { ...row.splits, [requirement.item_id]: splits } })}
+              disabled={!canEdit}
+            />
           </div>
-          <div className="bg-slate-900/90 p-3 rounded-xl border border-slate-700/80">
-            <span className="text-slate-400 text-[10px] uppercase font-bold block">2. Packaging Material Cost:</span>
-            <span className="text-base font-black text-blue-400 font-mono">{money(run.packaging_cost)}</span>
-            <span className="text-[10px] text-slate-400 block mt-0.5">Gross Run (1+2): {money(run.gross_production_cost)}</span>
+        ))}
+        {row.result && !requirements.length && <span className="text-xs text-slate-400">No packaging materials required.</span>}
+      </td>
+      {[
+        ['boxes_575g', 'bags_575g', 'border-r bg-indigo-50/30'],
+        ['boxes_312g', 'bags_312g', 'bg-emerald-50/30']
+      ].map(([boxesKey, bagsKey, tone]) => (
+        <td key={boxesKey} className={`min-w-52 p-3 ${tone}`}>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-[10px] font-extrabold uppercase">
+              Boxes
+              <input aria-label={`${row.recipe_name} boxes`} type="number" min="0" step="1" value={row[boxesKey]}
+                onChange={(e) => setCount(boxesKey, e.target.value)} className={`${inputClass} mt-1 text-center`} disabled={!canEdit} />
+            </label>
+            <label className="text-[10px] font-extrabold uppercase">
+              Bags
+              <input aria-label={`${row.recipe_name} loose bags`} type="number" min="0" step="1" value={row[bagsKey]}
+                onChange={(e) => setCount(bagsKey, e.target.value)} className={`${inputClass} mt-1 text-center`} disabled={!canEdit} />
+            </label>
           </div>
-          <div className="bg-rose-950/70 p-3 rounded-xl border border-rose-700/80">
-            <span className="text-rose-300 text-[10px] uppercase font-bold block">3. Less Batch Wastage Cost:</span>
-            <span className="text-base font-black text-rose-400 font-mono">-{money(run.wastage_cost)}</span>
-            <span className="text-[10px] text-rose-300/80 block mt-0.5">{run.wastage_percent}% ({fmt(run.wastage_kg, 2)} kg from ingredients)</span>
-          </div>
-          <div className="bg-emerald-950/70 p-3 rounded-xl border border-emerald-700/80">
-            <span className="text-emerald-300 text-[10px] uppercase font-bold block">Net Production Cost (After Wastage):</span>
-            <span className="text-lg font-black text-emerald-400 font-mono">{money(run.net_production_cost)}</span>
-            <span className="text-[10px] text-emerald-300/80 block mt-0.5">
-              {money(run.gross_production_cost)} − {money(run.wastage_cost)} wastage
-            </span>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto pt-1">
-          <table className="w-full text-left text-xs whitespace-nowrap">
-            <thead className="text-slate-400 font-semibold border-b border-slate-700/80">
-              <tr>
-                {packagingRows.map(([label]) => <th key={label} className="pb-1">{label}</th>)}
-                <th className="pb-1 text-emerald-400 font-extrabold text-right">Total Packaging Cost</th>
-              </tr>
-            </thead>
-            <tbody className="text-white font-mono text-sm">
-              <tr>
-                {packagingRows.map(([label, value, note]) => (
-                  <td key={label} className="pt-2">
-                    <div>{money(value)}</div>
-                    <div className="text-[10px] font-sans text-slate-400">{note}</div>
-                  </td>
-                ))}
-                <td className="pt-2 text-emerald-400 font-black text-right text-base">
-                  <div>{money(cost.total)}</div>
-                  {cost.other > 0 && <div className="text-[10px] font-sans text-slate-400">incl. {money(cost.other)} batch materials</div>}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+          <span className="mt-1 block text-center text-[10px] text-slate-500">1 box = 12 bags</span>
+        </td>
+      ))}
+    </tr>
   );
 }
 
-function PackagingScreen({ batches, batchId, setBatchId, canEdit, showToast, onSaved }) {
-  const [counts, setCounts] = useState(EMPTY_COUNTS);
-  const [result, setResult] = useState(null);
-  const [splits, setSplits] = useState({});
+function GroupReconciliationPanel({ batchNumber, runs }) {
+  if (!runs.length || runs.some((run) => !run.result)) {
+    return <div className="rounded-2xl bg-slate-900 p-5 text-xs text-slate-300">Calculating live packaging totals…</div>;
+  }
+  const sum = (getValue) => runs.reduce((total, run) => total + Number(getValue(run) || 0), 0);
+  const theoretical = sum((run) => run.result.theoretical_dough_grams);
+  const packaged = sum((run) => run.result.packaged_weight_grams);
+  const delta = packaged - theoretical;
+  const variance = delta > 50 ? 'Over-Yield' : delta < -50 ? 'Scrap / Loss' : 'Balanced';
+  const varianceTone = variance === 'Balanced' ? 'border-emerald-800 bg-emerald-950/60 text-emerald-400'
+    : variance === 'Over-Yield' ? 'border-rose-800 bg-rose-950/60 text-rose-400'
+      : 'border-amber-800 bg-amber-950/60 text-amber-400';
+  const grossMaterial = sum((run) => run.result.run_cost.gross_material_cost);
+  const packagingCost = sum((run) => run.result.cost.total);
+  const wastage = sum((run) => run.result.run_cost.wastage_cost);
+  const net = grossMaterial + packagingCost - wastage;
+
+  return (
+    <section className="space-y-3 rounded-2xl bg-slate-900 p-5 text-white shadow-md">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700 pb-2">
+        <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400">Live Packaging Delta &amp; Cost Reconciliation — Batch #{batchNumber}</h4>
+        <span className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">{runs.length} flavor run(s)</span>
+      </div>
+      <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-3">
+          <span className="block text-[10px] font-bold uppercase text-slate-400">Theoretical batch dough</span>
+          <b className="text-base">{fmt(theoretical, 0)} g</b>
+        </div>
+        <div className="rounded-xl border border-slate-700 bg-slate-800/80 p-3">
+          <span className="block text-[10px] font-bold uppercase text-slate-400">Total packaged weight</span>
+          <b className="text-base text-emerald-400">{fmt(packaged, 0)} g</b>
+        </div>
+        <div className={`rounded-xl border p-3 ${varianceTone}`}>
+          <span className="block text-[10px] font-bold uppercase text-slate-400">Live variance</span>
+          <b className="text-base">{delta > 0 ? '+' : ''}{fmt(delta, 0)} g · {variance}</b>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+        {[['Gross material', grossMaterial], ['Packaging materials', packagingCost], ['Less wastage', -wastage], ['Net production cost', net]].map(([label, value]) => (
+          <div key={label} className="rounded-xl border border-slate-700 bg-slate-800/70 p-3">
+            <span className="block text-[10px] font-bold uppercase text-slate-400">{label}</span>
+            <b className="font-mono">{money(value)}</b>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PackagingScreen({ batches, batchNumber, setBatchNumber, canEdit, showToast, onSaved }) {
+  const [packagingDate, setPackagingDate] = useState(todayIso());
+  const [employees, setEmployees] = useState(['', '', '', '']);
+  const [runs, setRuns] = useState([]);
   const [saving, setSaving] = useState(false);
 
-  const eligible = batches.filter((b) => PACKAGING_EDITABLE.includes(b.status));
-  const pending = eligible.filter((b) => !b.packaged_at);
-  const packaged = eligible.filter((b) => b.packaged_at);
-  const batch = batches.find((b) => b.id === batchId);
-
-  // Load the saved counts when a packaged batch is opened.
-  useEffect(() => {
-    if (!batch?.packaged_at) { setCounts(EMPTY_COUNTS); return; }
-    setCounts({
-      boxes_575g: String(batch.boxes_575g ?? ''), bags_575g: String(batch.bags_575g ?? ''),
-      boxes_312g: String(batch.boxes_312g ?? ''), bags_312g: String(batch.bags_312g ?? '')
+  const groups = useMemo(() => {
+    const grouped = new Map();
+    batches.filter((batch) => PACKAGING_EDITABLE.includes(batch.status)).forEach((batch) => {
+      const current = grouped.get(batch.batch_number) || [];
+      current.push(batch);
+      grouped.set(batch.batch_number, current);
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batchId]);
-
-  const numericCounts = Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, Math.max(0, parseInt(v, 10) || 0)]));
-  const query = useDebounced(JSON.stringify({ batchId, ...numericCounts }));
+    return [...grouped.entries()].map(([number, rows]) => ({ number, rows }));
+  }, [batches]);
+  const selectedGroup = groups.find((group) => group.number === batchNumber);
 
   useEffect(() => {
-    const { batchId: id, ...c } = JSON.parse(query);
-    if (!id) { setResult(null); setSplits({}); return; }
-    batchesAPI.packagingRequirements(id, c)
-      .then(({ data }) => { setResult(data); setSplits(splitsFromSuggestions(data.requirements.filter((r) => r.required > 0))); })
-      .catch((e) => { setResult(null); showToast(errorMessage(e, 'Could not calculate packaging'), 'error'); });
-  }, [query, showToast]);
+    if (!selectedGroup) {
+      setRuns([]);
+      return;
+    }
+    const first = selectedGroup.rows[0];
+    setPackagingDate(first.packaging_date ? String(first.packaging_date).slice(0, 10) : todayIso());
+    setEmployees(employeesFor(first.packaging_employees || []));
+    setRuns(selectedGroup.rows.map(packagingRunFrom));
+  }, [batchNumber, batches]);
 
-  const save = async () => {
+  const updateRun = (index, next) => setRuns((current) => current.map((run, i) => (
+    i === index ? (typeof next === 'function' ? next(run) : next) : run
+  )));
+  const updateEmployee = (index, value) => setEmployees((current) => current.map((name, i) => (i === index ? value : name)));
+
+  const save = async (e) => {
+    e.preventDefault();
+    const validEmployees = employees.map((name) => name.trim()).filter(Boolean);
+    if (!batchNumber || !runs.length) { showToast('Select a batch to package', 'error'); return; }
+    if (!validEmployees.length) { showToast('Enter at least one employee name', 'error'); return; }
+    if (runs.some((run) => !run.result)) { showToast('Wait for packaging requirements to finish loading', 'error'); return; }
     setSaving(true);
     try {
-      const { data } = await batchesAPI.savePackaging(batchId, { ...numericCounts, splits: splitsPayload(splits) });
-      showToast(`Batch #${data.batch_number} packaging saved; awaiting QA release`);
-      setBatchId('');
+      const { data } = await batchesAPI.savePackagingGroup({
+        batch_number: batchNumber,
+        packaging_date: packagingDate,
+        packaging_employees: validEmployees,
+        runs: runs.map((run) => ({
+          batch_id: run.batch_id,
+          boxes_575g: parseInt(run.boxes_575g, 10) || 0,
+          bags_575g: parseInt(run.bags_575g, 10) || 0,
+          boxes_312g: parseInt(run.boxes_312g, 10) || 0,
+          bags_312g: parseInt(run.bags_312g, 10) || 0,
+          splits: splitsPayload(run.splits)
+        }))
+      });
+      showToast(`Packaging saved for Batch #${data.batch_number} (${data.runs.length} flavor(s))`);
       await onSaved();
     } catch (e) {
       showToast(errorMessage(e, 'Failed to save packaging'), 'error');
@@ -515,68 +697,74 @@ function PackagingScreen({ batches, batchId, setBatchId, canEdit, showToast, onS
     }
   };
 
-  const setCount = (field) => (e) => setCounts((c) => ({ ...c, [field]: e.target.value }));
-  const needed = result?.requirements.filter((r) => r.required > 0) || [];
-
   return (
-    <Card title="Packaging Run">
-      <Field label="Batch to package" htmlFor="pk-batch">
-        <select id="pk-batch" value={batchId} onChange={(e) => setBatchId(e.target.value)} className={`${inputClass} font-mono`}>
-          <option value="">Select a baked batch…</option>
-          {pending.length > 0 && (
-            <optgroup label="Awaiting packaging">
-              {pending.map((b) => <option key={b.id} value={b.id}>{b.batch_number} — {b.recipe_name} ({b.production_date}) [{Number(b.bins_count)} bins]</option>)}
-            </optgroup>
-          )}
-          {packaged.length > 0 && (
-            <optgroup label="Packaged — edit">
-              {packaged.map((b) => <option key={b.id} value={b.id}>{b.batch_number} — {b.recipe_name} ({b.production_date}) [{b.status}]</option>)}
-            </optgroup>
-          )}
-        </select>
-      </Field>
-
-      {!batch && eligible.length === 0 && <p className="text-xs text-slate-400">No baked batches waiting. Save a baking batch first.</p>}
-
-      {batch && (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {[['575g', 'boxes_575g', 'bags_575g', 'bg-indigo-50 border-indigo-200'], ['312g', 'boxes_312g', 'bags_312g', 'bg-emerald-50 border-emerald-200']].map(([label, boxKey, bagKey, tone]) => (
-              <div key={label} className={`p-4 rounded-xl border space-y-2 ${tone}`}>
-                <span className="font-bold text-xs block">{label} Format (1 box = 12 bags)</span>
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Full boxes" htmlFor={`pk-${boxKey}`}>
-                    <input id={`pk-${boxKey}`} type="number" min="0" step="1" value={counts[boxKey]} onChange={setCount(boxKey)} className={inputClass} disabled={!canEdit} />
-                  </Field>
-                  <Field label="Loose bags" htmlFor={`pk-${bagKey}`}>
-                    <input id={`pk-${bagKey}`} type="number" min="0" step="1" value={counts[bagKey]} onChange={setCount(bagKey)} className={inputClass} disabled={!canEdit} />
-                  </Field>
-                </div>
-              </div>
+    <form onSubmit={save} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="bg-blue-600 px-6 py-3.5 text-white">
+        <h3 className="text-sm font-black uppercase tracking-wide">Production Packaging Screen</h3>
+        <p className="mt-0.5 text-[11px] text-blue-100">Choose a baking batch to load all of its flavors and package them together.</p>
+      </div>
+      <div className="space-y-4 border-b border-blue-200 bg-blue-50/70 p-5">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Field label="Batch # (from Baking) *" htmlFor="pk-batch">
+            <select id="pk-batch" value={batchNumber} onChange={(e) => setBatchNumber(e.target.value)} className={`${inputClass} font-mono font-bold`}>
+              <option value="">Select saved baking batch…</option>
+              {groups.map((group) => (
+                <option key={group.number} value={group.number}>
+                  {group.number} ({group.rows.length} flavor{group.rows.length === 1 ? '' : 's'}: {group.rows.map((run) => run.recipe_name).join(', ')})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Packaging date *" htmlFor="pk-date">
+            <input id="pk-date" type="date" value={packagingDate} onChange={(e) => setPackagingDate(e.target.value)} className={inputClass} disabled={!canEdit} required />
+          </Field>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-extrabold uppercase text-blue-950">Employees who worked on packaging *</label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
+            {employees.map((name, index) => (
+              <input key={index} value={name} onChange={(e) => updateEmployee(index, e.target.value)}
+                placeholder={`Employee ${index + 1}${index === 0 ? ' *' : ''}`} className={inputClass} disabled={!canEdit} />
             ))}
           </div>
-
-          {result && <ReconciliationPanel batch={batch} result={result} />}
-
-          {needed.length > 0 && (
-            <div className="space-y-3 bg-blue-50/50 p-4 rounded-xl border">
-              <span className="text-xs font-bold text-blue-900 uppercase">Packaging material lots (oldest first)</span>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {needed.map((r) => (
-                  <SplitEditor key={r.item_id} requirement={r} rows={splits[r.item_id] || []} onChange={(rows) => setSplits((s) => ({ ...s, [r.item_id]: rows }))} disabled={!canEdit} />
+        </div>
+      </div>
+      {selectedGroup && runs.length > 0 ? (
+        <>
+          <div className="m-5">
+            <GroupReconciliationPanel batchNumber={batchNumber} runs={runs} />
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left text-xs">
+              <thead className="bg-slate-900 text-[10px] font-extrabold uppercase text-white">
+                <tr>
+                  <th className="border-r border-slate-700 px-4 py-3">Flavors from baking</th>
+                  <th className="border-r border-slate-700 px-4 py-3">Packaging materials and lot splits</th>
+                  <th className="border-r border-slate-700 px-4 py-3 text-center">575g boxes / bags</th>
+                  <th className="px-4 py-3 text-center">312g boxes / bags</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {runs.map((run, index) => (
+                  <PackagingRunEditor key={run.batch_id} row={run} canEdit={canEdit} onChange={(next) => updateRun(index, next)} />
                 ))}
-              </div>
+              </tbody>
+            </table>
+          </div>
+          {canEdit && (
+            <div className="flex justify-end border-t bg-slate-50 p-4">
+              <button type="submit" disabled={saving || runs.some((run) => !run.result)} className="rounded-xl bg-blue-600 px-6 py-2.5 text-xs font-extrabold text-white disabled:opacity-50">
+                Save Packaging for Batch #{batchNumber}
+              </button>
             </div>
           )}
-
-          {canEdit && (
-            <button type="button" disabled={saving || !result} onClick={save} className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold disabled:opacity-50">
-              Save Packaging &amp; Send to QA
-            </button>
-          )}
         </>
+      ) : (
+        <div className="p-10 text-center text-xs text-slate-500">
+          {groups.length ? <>Select a saved <b>Batch #</b> above to load its baked flavors.</> : 'No baked batches waiting for packaging.'}
+        </div>
       )}
-    </Card>
+    </form>
   );
 }
 
@@ -649,11 +837,15 @@ function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onS
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filtered.map((b) => (
+            {filtered.map((b) => {
+              const batchGroup = batches.filter((item) => item.batch_number === b.batch_number);
+              const groupCanEdit = batchGroup.every((item) => BAKING_EDITABLE.includes(item.status));
+              return (
               <tr key={b.id} className="hover:bg-slate-50">
                 <td className="px-4 py-3">
                   <div className="font-mono font-bold text-slate-900">{b.batch_number}</div>
                   <div className="text-[10px] text-slate-400">{String(b.production_date).slice(0, 10)}</div>
+                  {batchGroup.length > 1 && <div className="text-[10px] font-bold text-amber-700">{batchGroup.length} formulations in batch</div>}
                 </td>
                 <td className="px-4 py-3 font-semibold text-slate-800">{b.recipe_name}</td>
                 <td className="px-4 py-3 font-bold text-slate-700 whitespace-nowrap">
@@ -689,11 +881,11 @@ function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onS
                 <td className="px-4 py-3"><StatusPill status={b.status} /></td>
                 <td className="px-4 py-3 no-print">
                   <div className="flex justify-end gap-1 text-slate-500">
-                    {canEdit && BAKING_EDITABLE.includes(b.status) && (
-                      <button onClick={() => onEditBaking(b)} className={`${iconBtn} hover:text-amber-700`} title="Edit baking" aria-label={`Edit baking for ${b.batch_number}`}><Pencil size={15} /></button>
+                    {canEdit && groupCanEdit && (
+                      <button onClick={() => onEditBaking(b)} className={`${iconBtn} hover:text-amber-700`} title="Edit all formulations in this batch" aria-label={`Edit baking for ${b.batch_number}`}><Pencil size={15} /></button>
                     )}
                     {canEdit && PACKAGING_EDITABLE.includes(b.status) && (
-                      <button onClick={() => onPackaging(b.id)} className="px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-lg transition" title={b.packaged_at ? 'Edit packaging' : 'Package'} aria-label={`Packaging for ${b.batch_number}`}>
+                      <button onClick={() => onPackaging(b.batch_number)} className="px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold rounded-lg transition" title={b.packaged_at ? 'Edit packaging' : 'Package'} aria-label={`Packaging for ${b.batch_number}`}>
                         {b.packaged_at ? 'Edit Pkg' : 'Package'}
                       </button>
                     )}
@@ -712,7 +904,8 @@ function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onS
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={9} className="text-center py-8 text-slate-400">
