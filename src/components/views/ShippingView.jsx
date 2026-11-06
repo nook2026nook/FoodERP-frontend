@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Search, Trash2 } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Database, Search, Trash2 } from 'lucide-react';
 import { inventoryAPI, shipmentsAPI, errorMessage } from '../../api/client';
 import { Card, Field, downloadCsv, inputClass, todayIso } from '../ui';
 import QuickBooksPanel from '../QuickBooksPanel';
@@ -9,9 +9,18 @@ const EDIT_ROLES = ['Administrator', 'Shipping Clerk'];
 const emptyLine = () => ({ product: '', unit_type: 'box', quantity: '', batch_id: '' });
 const noFilters = { search: '', from: '', to: '', source: '', attention: false };
 const needsAttention = (s) => s.lines.some((l) => l.allocation_status !== 'allocated');
+const unitLabel = (n, unitType) => (unitType === 'bag' ? (n === 1 ? 'bag' : 'bags') : (n === 1 ? 'box' : 'boxes'));
+const lineFlavor = (l) => (l.recipe_name ? `${l.recipe_name}${l.format ? ` ${l.format}` : ''}` : l.product_description) || 'Unmapped product';
+const LINE_STATUS = {
+  allocated: ['Mapped', 'text-emerald-700 bg-emerald-50'],
+  partial: ['Partial', 'text-amber-700 bg-amber-50'],
+  unallocated: ['Unmapped', 'text-rose-700 bg-rose-50']
+};
 
 export default function ShippingView({ currentUserRole, showToast }) {
   const canEdit = EDIT_ROLES.includes(currentUserRole);
+  const isAdmin = currentUserRole === 'Administrator';
+  const [busyLine, setBusyLine] = useState(null);
   const [stock, setStock] = useState([]);       // per-batch finished stock
   const [shipments, setShipments] = useState([]);
   const [customer, setCustomer] = useState('');
@@ -95,14 +104,87 @@ export default function ShippingView({ currentUserRole, showToast }) {
   const qboCount = shipments.filter((s) => s.source === 'QuickBooks API').length;
   const attentionCount = shipments.filter(needsAttention).length;
 
+  const totalLines = visible.reduce((n, s) => n + s.lines.length, 0);
+  const mappedLines = visible.reduce((n, s) => n + s.lines.filter((l) => l.allocation_status === 'allocated').length, 0);
+
   const exportCsv = () => {
     downloadCsv(`dispatches_${filters.from || 'all'}_to_${filters.to || todayIso()}.csv`, [
-      ['Date', 'Customer', 'Invoice', 'Product', 'Quantity', 'Unit', 'Batches', 'Source', 'Allocation'],
+      ['Invoice', 'Customer', 'Date', 'QuickBooks Item', 'Flavor (Product)', 'Quantity', 'Unit', 'Mapped Batch #', 'Mapping Status', 'Source'],
       ...visible.flatMap((s) => s.lines.map((l) => [
-        String(s.shipped_at).slice(0, 10), s.customer_name, s.invoice_number, l.product_description, l.quantity, l.unit_type || '',
-        l.allocations.map((a) => a.batch_number).join(' '), s.source, l.allocation_status
+        s.invoice_number, s.customer_name, String(s.shipped_at).slice(0, 10), l.product_description, lineFlavor(l),
+        l.quantity, l.unit_type || '',
+        l.allocations.map((a) => `${a.batch_number} (${a.boxes ? `${a.boxes} box` : `${a.bags} bag`})`).join('; '),
+        LINE_STATUS[l.allocation_status]?.[0] || l.allocation_status, s.source
       ]))
     ]);
+  };
+
+  // Batch options per line: released batch stock as "batchId|format".
+  const batchChoices = (l) => {
+    const options = stock.map((b) => ({
+      value: `${b.batch_id}|${b.format}`,
+      label: `${b.batch_number} — ${b.recipe_name} ${b.format} (${b.boxes_on_hand} box · ${b.bags_on_hand} bag)`,
+      match: l.recipe_id ? b.recipe_id === l.recipe_id && (!l.format || b.format === l.format) : false
+    }));
+    // Keep batches the line already uses visible even when they have no stock left.
+    for (const a of l.allocations) {
+      const value = `${a.batch_id}|${l.format}`;
+      if (!options.some((o) => o.value === value)) {
+        options.unshift({ value, label: `${a.batch_number} — ${lineFlavor(l)} (allocated)`, match: true });
+      }
+    }
+    return { matching: options.filter((o) => o.match), other: options.filter((o) => !o.match) };
+  };
+  const currentChoice = (l) => {
+    const ids = [...new Set(l.allocations.map((a) => a.batch_id))];
+    if (ids.length === 1) return `${ids[0]}|${l.format}`;
+    return ids.length > 1 ? 'multiple' : '';
+  };
+
+  const mapBatch = async (l, value) => {
+    if (!value || value === 'multiple') return;
+    const [batchId, format] = value.split('|');
+    setBusyLine(l.id);
+    try {
+      const { data } = await shipmentsAPI.mapLineBatch(l.id, { batch_id: batchId, format });
+      let msg = `Mapped ${data.recipe_name} ${format} to Batch #${data.batch_number}`;
+      if (data.shortfall > 0) msg += ` — ${data.shortfall} ${unitLabel(data.shortfall, l.unit_type)} still need a batch`;
+      if (data.remembered) msg += `. QuickBooks item remembered${data.applied?.allocated ? `; ${data.applied.allocated} other line(s) mapped` : ''}`;
+      showToast(msg, data.shortfall > 0 ? 'error' : undefined);
+      await load();
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to map batch'), 'error');
+    } finally {
+      setBusyLine(null);
+    }
+  };
+
+  const unmapLine = async (l) => {
+    setBusyLine(l.id);
+    try {
+      await shipmentsAPI.releaseLine(l.id);
+      showToast('Batch mapping removed; stock returned to the batch');
+      await load();
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to remove mapping'), 'error');
+    } finally {
+      setBusyLine(null);
+    }
+  };
+
+  // Oldest-batch-first for every open line of an invoice that already has a product.
+  const autoMap = async (s) => {
+    const open = s.lines.filter((l) => l.allocation_status !== 'allocated' && l.recipe_id);
+    if (!open.length) { showToast('Choose a batch for each line first; these items have no product mapping yet', 'error'); return; }
+    let failed = 0;
+    for (const l of open) {
+      try {
+        const { data } = await shipmentsAPI.allocateLine(l.id);
+        if (data.status !== 'allocated') failed++;
+      } catch { failed++; }
+    }
+    showToast(failed ? `${open.length - failed} line(s) mapped, ${failed} without released stock` : `${open.length} line(s) mapped oldest batch first`, failed ? 'error' : undefined);
+    await load();
   };
 
   usePageExport(exportCsv);
@@ -219,50 +301,158 @@ export default function ShippingView({ currentUserRole, showToast }) {
             )}
           </div>
         </div>
-        <div className="overflow-x-auto -mx-6">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-y border-slate-200">
+        <div className="-mx-6 px-6 py-3 border-y border-slate-200 bg-slate-50 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h4 className="font-bold text-xs uppercase text-slate-800">
+              QuickBooks Invoices &amp; Product Flavor Lines ({visible.length} {visible.length === 1 ? 'Invoice' : 'Invoices'} &bull; {totalLines} Total Lines)
+            </h4>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 rounded-lg text-xs">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Source:</span>
+              <Database size={13} className="text-emerald-600" aria-hidden="true" />
+              <span className="font-extrabold text-slate-800">Nature&apos;s Mix (QuickBooks Online)</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] font-bold">
+            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">{mappedLines} Lines Mapped</span>
+            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">{totalLines - mappedLines} Need Batch # in View</span>
+          </div>
+        </div>
+        <div className="overflow-x-auto -mx-6 -mt-4">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead className="bg-slate-100 text-slate-700 uppercase font-extrabold tracking-wider border-b text-[10px]">
               <tr>
-                <th className="px-6 py-3">Date</th>
-                <th className="px-6 py-3">Customer</th>
-                <th className="px-6 py-3">Invoice</th>
-                <th className="px-6 py-3">Products</th>
-                <th className="px-6 py-3">From batches</th>
-                <th className="px-6 py-3">Source</th>
-                {canEdit && <th className="px-6 py-3" />}
+                <th className="p-3.5 w-10 text-center">#</th>
+                <th className="p-3.5">Invoice # / Line Items</th>
+                <th className="p-3.5">Customer / Flavor (Product)</th>
+                <th className="p-3.5">Date</th>
+                <th className="p-3.5 text-right">Quantity</th>
+                <th className="p-3.5">Mapped Batch #</th>
+                <th className="p-3.5 text-center">QB Status</th>
+                {canEdit && <th className="p-3.5 text-center no-print">Action</th>}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {visible.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50 align-top">
-                  <td className="px-6 py-2.5 whitespace-nowrap">{s.shipped_at}</td>
-                  <td className="px-6 py-2.5 font-bold text-slate-800">{s.customer_name}</td>
-                  <td className="px-6 py-2.5 font-mono">{s.invoice_number}</td>
-                  <td className="px-6 py-2.5">
-                    {s.lines.map((l) => (
-                      <div key={l.id}>
-                        {l.quantity} {l.unit_type === 'box' ? 'box' : 'bag'}{l.quantity === 1 ? '' : (l.unit_type === 'box' ? 'es' : 's')} · {l.product_description}
-                        {l.allocation_status !== 'allocated' && <span className="ml-1 text-[10px] font-bold text-rose-600 uppercase">{l.allocation_status}</span>}
-                      </div>
-                    ))}
-                  </td>
-                  <td className="px-6 py-2.5 font-mono text-slate-600">
-                    {s.lines.flatMap((l) => l.allocations).map((a) => (
-                      <div key={`${a.line_id}-${a.batch_id}`}>{a.batch_number}: {a.boxes ? `${a.boxes} box` : `${a.bags} bag`}</div>
-                    ))}
-                  </td>
-                  <td className="px-6 py-2.5 text-slate-500">{s.source}</td>
-                  {canEdit && (
-                    <td className="px-6 py-2.5 text-right">
-                      {s.source === 'Manual' && (
-                        <button onClick={() => remove(s)} className="text-slate-400 hover:text-red-600" aria-label={`Delete shipment ${s.invoice_number}`}><Trash2 size={15} /></button>
+            <tbody className="divide-y divide-slate-200">
+              {visible.map((s, invIdx) => {
+                const units = [...new Set(s.lines.map((l) => l.unit_type || 'box'))];
+                const totalQty = s.lines.reduce((n, l) => n + Number(l.quantity || 0), 0);
+                const fromQbo = s.source === 'QuickBooks API';
+                const open = needsAttention(s);
+                const single = s.lines.length === 1 ? s.lines[0] : null;
+                return (
+                  <Fragment key={s.id}>
+                    {/* Invoice row */}
+                    <tr className="bg-slate-50 border-t-2 border-slate-300 font-bold">
+                      <td className="p-3 text-slate-400 font-mono text-[11px] text-center">{invIdx + 1}</td>
+                      <td className="p-3 whitespace-nowrap">
+                        <span className="px-2.5 py-1 bg-slate-900 text-white rounded-lg text-xs font-mono tracking-wide">{s.invoice_number}</span>
+                        <span className="ml-2 text-[10px] text-slate-500 font-semibold">({s.lines.length} {s.lines.length === 1 ? 'flavor' : 'flavors'})</span>
+                      </td>
+                      <td className="p-3 font-black text-slate-800">{s.customer_name}</td>
+                      <td className="p-3 text-slate-600 whitespace-nowrap">{String(s.shipped_at).slice(0, 10)}</td>
+                      <td className="p-3 text-right font-mono font-black text-slate-900 text-sm whitespace-nowrap">
+                        {totalQty} <span className="text-[10px] text-slate-400 font-normal">{units.length === 1 ? unitLabel(totalQty, units[0]) : 'units'}</span>
+                      </td>
+                      <td className="p-3 text-[11px] text-slate-500 italic">
+                        {single
+                          ? (single.allocations.length ? `Batch #${single.allocations.map((a) => a.batch_number).join(', ')}` : 'Batch # not mapped')
+                          : 'See flavors below'}
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        {fromQbo ? (
+                          <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">✓ QB Synced</span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">Manual</span>
+                        )}
+                      </td>
+                      {canEdit && (
+                        <td className="p-3 text-center whitespace-nowrap no-print">
+                          {s.source === 'Manual' ? (
+                            <button onClick={() => remove(s)} className="text-slate-400 hover:text-red-600" aria-label={`Delete shipment ${s.invoice_number}`}><Trash2 size={15} /></button>
+                          ) : open && isAdmin ? (
+                            <button type="button" onClick={() => autoMap(s)} title="Map open lines to the oldest released batch of their product"
+                              className="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-blue-600 hover:bg-blue-700 text-white">
+                              Auto-map Batches
+                            </button>
+                          ) : null}
+                        </td>
                       )}
-                    </td>
-                  )}
-                </tr>
-              ))}
+                    </tr>
+
+                    {/* Flavor lines under the invoice */}
+                    {s.lines.map((l, lineIdx) => {
+                      const { matching, other } = batchChoices(l);
+                      const value = currentChoice(l);
+                      const [statusLabel, statusClass] = LINE_STATUS[l.allocation_status] || [l.allocation_status, 'text-slate-600 bg-slate-50'];
+                      return (
+                        <tr key={l.id} className="bg-white hover:bg-emerald-50/50 border-l-4 border-l-emerald-500 align-top">
+                          <td className="p-2.5 text-slate-300 text-center font-mono text-[10px]">↳</td>
+                          <td className="p-2.5 pl-6 font-mono text-[11px] text-slate-500">
+                            <span className="text-slate-400">Line #{lineIdx + 1}</span>
+                            {l.qbo_line_id && <span>: QB-{l.qbo_line_id}</span>}
+                          </td>
+                          <td className="p-2.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`h-2 w-2 rounded-full flex-shrink-0 ${l.allocation_status === 'allocated' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                              <span className="font-extrabold text-slate-800">{lineFlavor(l)}</span>
+                            </div>
+                            {l.recipe_name && l.product_description && (
+                              <div className="pl-3.5 text-[10px] text-slate-400">QB item: {l.product_description}</div>
+                            )}
+                          </td>
+                          <td className="p-2.5 text-slate-400 text-[11px] whitespace-nowrap">{String(s.shipped_at).slice(0, 10)}</td>
+                          <td className="p-2.5 text-right font-mono font-bold text-slate-800 whitespace-nowrap">
+                            {l.quantity} <span className="text-[10px] text-slate-400 font-normal">{unitLabel(Number(l.quantity), l.unit_type || 'box')}</span>
+                          </td>
+                          <td className="p-2.5">
+                            {canEdit ? (
+                              <select
+                                aria-label={`Batch for ${lineFlavor(l)} on invoice ${s.invoice_number}`}
+                                value={value}
+                                disabled={busyLine === l.id}
+                                onChange={(e) => mapBatch(l, e.target.value)}
+                                className="w-full min-w-[220px] px-2.5 py-1 border border-slate-300 rounded-lg text-[11px] font-mono bg-white focus:outline-none focus:border-emerald-500 font-semibold text-slate-700 disabled:opacity-60"
+                              >
+                                <option value="">Map Batch #...</option>
+                                {value === 'multiple' && <option value="multiple" disabled>Multiple batches</option>}
+                                {matching.length > 0 && (
+                                  <optgroup label="Same product">
+                                    {matching.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                  </optgroup>
+                                )}
+                                {other.length > 0 && (
+                                  <optgroup label={matching.length ? 'Other batches' : 'Released batches'}>
+                                    {other.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                  </optgroup>
+                                )}
+                              </select>
+                            ) : null}
+                            {l.allocations.length > 0 && (
+                              <div className="mt-1 font-mono text-[10px] text-slate-500">
+                                {l.allocations.map((a) => `${a.batch_number}: ${a.boxes ? `${a.boxes} box` : `${a.bags} bag`}`).join(' · ')}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-2.5 text-center whitespace-nowrap">
+                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${statusClass}`}>{statusLabel}</span>
+                          </td>
+                          {canEdit && (
+                            <td className="p-2.5 text-center whitespace-nowrap no-print">
+                              {isAdmin && l.allocations.length > 0 && (
+                                <button type="button" onClick={() => unmapLine(l)} disabled={busyLine === l.id}
+                                  className="text-[10px] text-slate-400 hover:text-rose-600 font-medium underline">
+                                  unmap
+                                </button>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </Fragment>
+                );
+              })}
               {visible.length === 0 && (
-                <tr><td colSpan={canEdit ? 7 : 6} className="text-center py-8 text-slate-400">
+                <tr><td colSpan={canEdit ? 8 : 7} className="text-center py-8 text-slate-400">
                   {shipments.length === 0 ? 'No dispatches recorded yet.' : 'No dispatches match these filters.'}
                 </td></tr>
               )}

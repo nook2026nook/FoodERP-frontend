@@ -129,7 +129,11 @@ export const batchesAPI = {
 export const shipmentsAPI = {
   getAll: (params) => api.get('/shipments', { params }),
   create: (data) => api.post('/shipments', data),
-  delete: (id) => api.delete(`/shipments/${id}`)
+  delete: (id) => api.delete(`/shipments/${id}`),
+  // Map one invoice line to a production batch (format = 575g/312g stock of that batch).
+  mapLineBatch: (lineId, data) => api.put(`/shipments/lines/${lineId}/batch`, data),
+  allocateLine: (lineId) => api.post(`/shipments/lines/${lineId}/allocate`, {}),
+  releaseLine: (lineId) => api.post(`/shipments/lines/${lineId}/release`, {})
 };
 
 // Finished goods (ready-to-ship) endpoints
