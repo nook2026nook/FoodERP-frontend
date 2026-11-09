@@ -25,6 +25,24 @@ const emptyForm = () => ({
 
 const isVaultLocked = (e) => e?.response?.data?.code === 'VAULT_LOCKED';
 
+/**
+ * v60 formula weights: baking grams + gram-measured packaging (film, liners).
+ * Unit-counted packaging (bags, boxes) has no weight here and is counted apart.
+ */
+function formulaWeights(items = [], packaging = []) {
+  const bakeGrams = items.reduce((a, r) => a + (Number(r.grams_per_batch) || 0), 0);
+  let pkgGrams = 0;
+  let pkgUnits = 0;
+  packaging.forEach((r) => {
+    if (!r.packaging_id) return;
+    const amount = Number(r.amount) || 0;
+    if (r.measure === 'grams') pkgGrams += amount; else pkgUnits += amount;
+  });
+  return { bakeGrams, pkgGrams, pkgUnits, totalGrams: bakeGrams + pkgGrams };
+}
+
+const kgOf = (g) => (g / 1000).toFixed(2);
+
 export default function RecipesView({ currentUserRole, showToast }) {
   const [unlocked, setUnlocked] = useState(hasVaultToken());
 
@@ -204,16 +222,21 @@ function Formulations({ currentUserRole, showToast, onLock }) {
 
   const exportCSV = () => {
     const rows = [[
-      'Formulation Name', 'Wastage %', 'Labor Cost ($)', 'Total Baking Grams (g)', 'Batch Material Cost ($)',
+      'Formulation Name', 'Wastage %', 'Labor Cost ($)', 'Baking Weight (g)', 'Packaging Weight Excl Units (g)',
+      'Total Formula Weight (g)', 'Total Formula Weight (kg)', 'Batch Material Cost ($)',
       '575g Material Cost ($)', '312g Material Cost ($)', 'Mfg Price 575g ($)', 'Dist Price 575g ($)', 'Retail Price 575g ($)',
       'Mfg Price 312g ($)', 'Dist Price 312g ($)', 'Retail Price 312g ($)'
     ]];
-    sortedRecipes.forEach((r) => rows.push([
-      r.name, Number(r.wastage_percent) || 0, (Number(r.labor_cost_per_batch) || 0).toFixed(2), Number(r.total_baking_grams) || 0,
+    sortedRecipes.forEach((r) => {
+      const w = formulaWeights(r.items, r.packaging);
+      rows.push([
+      r.name, Number(r.wastage_percent) || 0, (Number(r.labor_cost_per_batch) || 0).toFixed(2), w.bakeGrams, w.pkgGrams,
+      w.totalGrams, kgOf(w.totalGrams),
       (Number(r.cost_per_batch) || 0).toFixed(2), (Number(r.cost_per_575g) || 0).toFixed(2), (Number(r.cost_per_312g) || 0).toFixed(2),
       (Number(r.mfg_price_575g) || 0).toFixed(2), (Number(r.dist_price_575g) || 0).toFixed(2), (Number(r.retail_price_575g) || 0).toFixed(2),
       (Number(r.mfg_price_312g) || 0).toFixed(2), (Number(r.dist_price_312g) || 0).toFixed(2), (Number(r.retail_price_312g) || 0).toFixed(2)
-    ]));
+      ]);
+    });
     downloadCSV(`Formulations_Costing_${todayStamp()}.csv`, rows);
     showToast('Formulations exported to Excel/CSV!');
   };
@@ -226,6 +249,7 @@ function Formulations({ currentUserRole, showToast, onLock }) {
     packaging: form.packaging.map((r) => ({ ...r, measure: itemById[r.packaging_id]?.unit_type === 'kg' ? 'grams' : 'units' }))
   }), [form, itemById]);
 
+  const formWeights = useMemo(() => formulaWeights(form.items, formWithMeasures.packaging), [form.items, formWithMeasures]);
   const payload = useMemo(() => toPayload(formWithMeasures), [formWithMeasures]);
   const debouncedPayload = useDebounced(payload ? JSON.stringify(payload) : null);
 
@@ -351,7 +375,12 @@ function Formulations({ currentUserRole, showToast, onLock }) {
             </div>
 
             <div className="space-y-3 bg-amber-50/50 p-4 rounded-xl border">
-              <span className="text-xs font-bold text-amber-900 uppercase">🌾 Baking Ingredients (grams per batch)</span>
+              <div className="flex items-center gap-2 flex-wrap border-b border-amber-200/80 pb-2.5">
+                <span className="text-xs font-bold text-amber-900 uppercase">🌾 Baking Ingredients (grams per batch)</span>
+                <span className="text-xs font-black text-amber-900 bg-amber-100 px-2.5 py-0.5 rounded-md border border-amber-300">
+                  Total Baking Weight: {formWeights.bakeGrams.toLocaleString()} g ({kgOf(formWeights.bakeGrams)} kg)
+                </span>
+              </div>
               {form.items.map((row, idx) => (
                 <div key={idx} className="flex gap-2 items-center">
                   <select aria-label="Baking ingredient" value={row.item_id} onChange={(e) => updateRow('items', idx, 'item_id', e.target.value)} className={`${inputClass} !w-auto min-w-0 flex-1`}>
@@ -368,7 +397,14 @@ function Formulations({ currentUserRole, showToast, onLock }) {
             </div>
 
             <div className="space-y-3 bg-blue-50/50 p-4 rounded-xl border">
-              <span className="text-xs font-bold text-blue-900 uppercase">📦 Packaging Bill of Materials (BOM)</span>
+              <div className="flex items-center gap-2 flex-wrap border-b border-blue-200/80 pb-2.5">
+                <span className="text-xs font-bold text-blue-900 uppercase">📦 Packaging Bill of Materials (BOM)</span>
+                <span className="text-xs font-black text-blue-900 bg-blue-100 px-2.5 py-0.5 rounded-md border border-blue-300">
+                  {formWeights.pkgGrams > 0
+                    ? `Total Packaging Weight: ${formWeights.pkgGrams.toLocaleString()} g (${kgOf(formWeights.pkgGrams)} kg)`
+                    : `Total Packaging: ${formWeights.pkgUnits.toLocaleString()} units`}
+                </span>
+              </div>
               {formWithMeasures.packaging.map((row, idx) => (
                 <div key={idx} className="grid grid-cols-2 sm:grid-cols-12 gap-2 items-center">
                   <select aria-label="Packaging material" value={row.packaging_id} onChange={(e) => updateRow('packaging', idx, 'packaging_id', e.target.value)} className={`${inputClass} col-span-2 sm:col-span-5`}>
@@ -390,6 +426,19 @@ function Formulations({ currentUserRole, showToast, onLock }) {
               <button type="button" onClick={() => addRow('packaging', { packaging_id: '', amount: '', assignment: 'bag575' })} className="text-xs font-bold text-blue-800">+ Add Packaging Material</button>
             </div>
 
+            <div className="bg-emerald-50/80 border-2 border-emerald-300 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-950 block">⚖️ Total Formula Weight (baking + packaging grams, excluding units)</span>
+                <span className="text-[11px] text-emerald-800">
+                  Baking: <b>{formWeights.bakeGrams.toLocaleString()} g</b> + Packaging: <b>{formWeights.pkgGrams.toLocaleString()} g</b>
+                  {formWeights.pkgUnits > 0 ? ` • ${formWeights.pkgUnits.toLocaleString()} unit-counted packaging excluded from weight` : ''}
+                </span>
+              </div>
+              <span className="text-lg font-black text-emerald-900 bg-white px-3.5 py-1.5 rounded-xl border border-emerald-300 shadow-sm whitespace-nowrap">
+                {formWeights.totalGrams.toLocaleString()} g ({kgOf(formWeights.totalGrams)} kg)
+              </span>
+            </div>
+
             <CostPreview preview={preview} />
 
             <button type="submit" disabled={saving} className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold disabled:opacity-60">
@@ -404,7 +453,9 @@ function Formulations({ currentUserRole, showToast, onLock }) {
         actions={<span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">Sorted A &rarr; Z</span>}
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {sortedRecipes.map((r) => (
+          {sortedRecipes.map((r) => {
+            const w = formulaWeights(r.items, r.packaging);
+            return (
             <div key={r.id} className={`p-4 border rounded-xl space-y-2 ${editingId === r.id ? 'bg-amber-50 border-amber-300' : 'bg-slate-50'}`}>
               <div className="flex justify-between items-center gap-2">
                 <span className="font-bold text-slate-900 text-sm">{r.name}</span>
@@ -416,15 +467,25 @@ function Formulations({ currentUserRole, showToast, onLock }) {
                 )}
               </div>
               <div className="text-xs text-slate-600 space-y-1">
-                <div><b>Baking Ingredients:</b> {r.items.length} items ({fmt(r.total_baking_grams, 0)} g total)</div>
-                <div><b>Packaging BOM:</b> {r.packaging.length} items · <b>Scale:</b> {r.scale_basis === 'bin' ? 'per bin' : 'per batch'}</div>
+                <div><b>Baking Ingredients:</b> {r.items.length} items ({fmt(w.bakeGrams, 0)} g · {kgOf(w.bakeGrams)} kg)</div>
+                <div>
+                  <b>Packaging BOM:</b> {r.packaging.length} items
+                  {w.pkgGrams > 0 && <> · {w.pkgGrams.toLocaleString()} g</>}
+                  {w.pkgUnits > 0 && <> · {w.pkgUnits.toLocaleString()} units</>}
+                  {' '}· <b>Scale:</b> {r.scale_basis === 'bin' ? 'per bin' : 'per batch'}
+                </div>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 font-bold text-emerald-900">
+                  ⚖️ Total Formula Weight: {w.totalGrams.toLocaleString()} g ({kgOf(w.totalGrams)} kg)
+                  <span className="font-semibold text-emerald-700"> [Baking {w.bakeGrams.toLocaleString()} g + Pkg {w.pkgGrams.toLocaleString()} g]</span>
+                </div>
                 <div><b>Estimated Batch Material Cost:</b> {money(r.cost_per_batch)}</div>
                 <div><b>575g Material Cost / Mfg Price:</b> {money(r.cost_per_575g)} / {money(r.mfg_price_575g)}</div>
                 <div><b>312g Material Cost / Mfg Price:</b> {money(r.cost_per_312g)} / {money(r.mfg_price_312g)}</div>
                 <div className="text-[10px] text-slate-400 italic">* Packaging cost calculated upon final production packaging run.</div>
               </div>
             </div>
-          ))}
+            );
+          })}
           {recipes.length === 0 && <p className="text-xs text-slate-400">No formulations saved yet.</p>}
         </div>
       </Card>

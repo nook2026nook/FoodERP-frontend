@@ -16,6 +16,7 @@ import IngredientsHubView from './components/views/IngredientsHubView';
 import ReceivingView from './components/views/ReceivingView';
 import RecipesView from './components/views/RecipesView';
 import ProductionView from './components/views/ProductionView';
+import ProductionPlanningView from './components/views/ProductionPlanningView';
 import ShippingView from './components/views/ShippingView';
 import ReadyToShipView from './components/views/ReadyToShipView';
 import ReportsView from './components/views/ReportsView';
@@ -37,6 +38,8 @@ function App() {
   const [isUserMgmtOpen, setIsUserMgmtOpen] = useState(false);
   const [isBackupOpen, setIsBackupOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  // Runs handed from Production Planning to the Baking screen (not saved until the operator saves them).
+  const [transferredRuns, setTransferredRuns] = useState(null);
 
   // Stable identity: views list it as an effect dependency when loading data.
   const showToast = useCallback((message, type = 'success') => {
@@ -74,7 +77,7 @@ function App() {
 
   const allowedMenus = currentUser
     ? (currentUser.role === 'Administrator'
-      ? ['dashboard', 'ingredients_hub', 'receiving', 'recipes', 'production', 'ready_to_ship', 'shipping', 'reports', 'wastage', 'recall', 'help']
+      ? ['dashboard', 'ingredients_hub', 'receiving', 'recipes', 'production_planning', 'production', 'ready_to_ship', 'shipping', 'reports', 'wastage', 'recall', 'help']
       : (currentUser.allowedMenus || []))
     : [];
 
@@ -226,10 +229,25 @@ function App() {
             />
           )}
 
+          {allowedMenus.includes('production_planning') && activeTab === 'production_planning' && (
+            <ProductionPlanningView
+              currentUserRole={currentUser.role}
+              showToast={showToast}
+              canOpenProduction={allowedMenus.includes('production')}
+              onTransferToBaking={(runs) => {
+                setTransferredRuns({ runs, key: Date.now() });
+                setActiveTab('production');
+                showToast('Plan transferred to Baking. Enter the batch # and employees, review lots, then save.');
+              }}
+            />
+          )}
+
           {allowedMenus.includes('production') && activeTab === 'production' && (
             <ProductionView
               currentUserRole={currentUser.role}
               showToast={showToast}
+              transferredRuns={transferredRuns}
+              onTransferConsumed={() => setTransferredRuns(null)}
             />
           )}
 

@@ -20,6 +20,7 @@ export default function Header({ activeTab, ingredientSubTab, currentUser, onLog
     }
     if (activeTab === 'receiving') return 'Receive Ingredients (Dock Inbound & Lot Pricing)';
     if (activeTab === 'recipes') return 'Formulations, Batch Costing & Distributor Margins';
+    if (activeTab === 'production_planning') return 'Production Planning (Order Boxes to Batch & Bin Calculator)';
     if (activeTab === 'production') return 'Production Runs & Live Packaging Delta';
     if (activeTab === 'shipping') return 'Shipping & QuickBooks Integration';
     if (activeTab === 'ready_to_ship') return 'Ready to Ship Inventory (Finished Goods)';

@@ -28,6 +28,7 @@ export default function ReceivingView({ currentUserRole, showToast, onGoToIngred
   const [filterCategory, setFilterCategory] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState('10');
+  const [editingLot, setEditingLot] = useState(null);
 
   const load = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -99,6 +100,53 @@ export default function ReceivingView({ currentUserRole, showToast, onGoToIngred
       await load();
     } catch (err) {
       showToast(errorMessage(err, 'Failed to delete lot'), 'error');
+    }
+  };
+
+  // v60: mark a lot as used up in one click (spillage, recount, discarded).
+  const zeroOutLot = async (lot) => {
+    const unit = lot.unit_type === 'kg' ? 'kg' : 'units';
+    if (!window.confirm(`Zero out lot ${lot.lot_number}? Its remaining ${Number(lot.remaining_quantity).toFixed(2)} ${unit} is set to 0 and it is marked depleted.`)) return;
+    try {
+      await lotsAPI.update(lot.id, { remaining_quantity: 0 });
+      showToast(`Lot ${lot.lot_number} zeroed out`);
+      await load();
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to zero out lot'), 'error');
+    }
+  };
+
+  const openLotEdit = (lot) => setEditingLot({
+    id: lot.id,
+    item_name: lot.item_name,
+    unit_type: lot.unit_type,
+    total_quantity: Number(lot.total_quantity) || 0,
+    lot_number: lot.lot_number || '',
+    po_number: lot.po_number || '',
+    received_at: lot.received_at ? String(lot.received_at).slice(0, 10) : '',
+    expiry_date: lot.expiry_date ? String(lot.expiry_date).slice(0, 10) : '',
+    remaining_quantity: String(Number(lot.remaining_quantity) || 0)
+  });
+
+  const saveLotEdit = async (e) => {
+    e.preventDefault();
+    const remaining = parseFloat(editingLot.remaining_quantity);
+    if (!editingLot.lot_number.trim()) { showToast('Lot # is required', 'error'); return; }
+    if (!(remaining >= 0)) { showToast('Enter the remaining quantity (0 or more)', 'error'); return; }
+    if (remaining > editingLot.total_quantity + EPS) { showToast('Remaining cannot be more than the quantity received', 'error'); return; }
+    try {
+      await lotsAPI.update(editingLot.id, {
+        lot_number: editingLot.lot_number.trim(),
+        po_number: editingLot.po_number.trim() || null,
+        expiry_date: editingLot.expiry_date || null,
+        ...(editingLot.received_at ? { received_at: editingLot.received_at } : {}),
+        remaining_quantity: remaining
+      });
+      showToast(`Lot ${editingLot.lot_number.trim()} updated`);
+      setEditingLot(null);
+      await load();
+    } catch (err) {
+      showToast(errorMessage(err, 'Failed to update lot'), 'error');
     }
   };
 
@@ -376,21 +424,42 @@ export default function ReceivingView({ currentUserRole, showToast, onGoToIngred
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 self-end sm:self-center">
-                  <div className="text-right">
+                <div className="flex items-center gap-2 self-end sm:self-center">
+                  <div className="text-right pr-1">
                     <div className={`text-sm font-black font-mono ${isZero ? 'text-slate-400 line-through' : 'text-emerald-700'}`}>
                       {remaining.toFixed(1)} {unit}
                     </div>
-                    <div className="text-[10px] text-slate-400 uppercase font-semibold">
-                      {isZero ? `0.0 ${unit} (At Bottom / Last Page)` : `of ${qty(l.total_quantity, l.unit_type)}`}
+                    <div className="text-[10px] text-slate-500 font-medium">
+                      Total: <span className="font-mono font-bold text-slate-700">{(Number(l.total_quantity) || 0).toFixed(1)} {unit}</span>
                     </div>
                   </div>
+                  {canEdit && !isZero && (
+                    <button
+                      type="button"
+                      onClick={() => zeroOutLot(l)}
+                      className="no-print px-2.5 py-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition flex items-center gap-1"
+                      title="Set remaining to 0 (depleted)"
+                    >
+                      <Icon name="Ban" size={12} className="text-amber-600" /> Zero Out
+                    </button>
+                  )}
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => openLotEdit(l)}
+                      className="no-print p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                      title="Edit lot details and remaining quantity"
+                      aria-label={`Edit lot ${l.lot_number}`}
+                    >
+                      <Icon name="Pencil" size={14} />
+                    </button>
+                  )}
                   {isAdmin && (
                     <button
                       type="button"
                       onClick={() => removeLot(l)}
-                      className="no-print p-1.5 text-slate-300 hover:text-rose-600 rounded-lg transition"
-                      title="Delete Lot"
+                      className="no-print p-1.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                      title="Delete Lot Permanently"
                       aria-label={`Delete lot ${l.lot_number}`}
                     >
                       <Icon name="Trash2" size={14} />
@@ -436,6 +505,47 @@ export default function ReceivingView({ currentUserRole, showToast, onGoToIngred
           </div>
         )}
       </div>
+
+      {editingLot && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form onSubmit={saveLotEdit} className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-sm text-slate-800">Edit Lot · {editingLot.item_name}</h4>
+              <button type="button" onClick={() => setEditingLot(null)} className="text-slate-400 hover:text-slate-600" aria-label="Close"><Icon name="X" size={18} /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Lot # *" htmlFor="el-lot">
+                <input id="el-lot" value={editingLot.lot_number} onChange={(e) => setEditingLot({ ...editingLot, lot_number: e.target.value })} className={`${inputClass} font-mono`} maxLength={100} required />
+              </Field>
+              <Field label="PO #" htmlFor="el-po">
+                <input id="el-po" value={editingLot.po_number} onChange={(e) => setEditingLot({ ...editingLot, po_number: e.target.value })} className={inputClass} maxLength={100} />
+              </Field>
+              <Field label="Received" htmlFor="el-recv">
+                <input id="el-recv" type="date" value={editingLot.received_at} onChange={(e) => setEditingLot({ ...editingLot, received_at: e.target.value })} className={inputClass} />
+              </Field>
+              <Field label="Expiry" htmlFor="el-exp">
+                <input id="el-exp" type="date" value={editingLot.expiry_date} onChange={(e) => setEditingLot({ ...editingLot, expiry_date: e.target.value })} className={inputClass} />
+              </Field>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="el-rem" className="text-[11px] font-extrabold text-emerald-800 uppercase">Remaining ({editingLot.unit_type === 'kg' ? 'kg' : 'units'}) *</label>
+                <div className="flex gap-1">
+                  <button type="button" onClick={() => setEditingLot({ ...editingLot, remaining_quantity: '0' })} className="px-2 py-0.5 text-[10px] font-bold bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded">Set 0</button>
+                  <button type="button" onClick={() => setEditingLot({ ...editingLot, remaining_quantity: String(editingLot.total_quantity) })} className="px-2 py-0.5 text-[10px] font-bold bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded">Reset to Total</button>
+                </div>
+              </div>
+              <input id="el-rem" type="number" step="any" min="0" max={editingLot.total_quantity} value={editingLot.remaining_quantity}
+                onChange={(e) => setEditingLot({ ...editingLot, remaining_quantity: e.target.value })} className={`${inputClass} font-mono font-bold`} required />
+              <div className="text-[10px] text-emerald-800">Received total: <b>{qty(editingLot.total_quantity, editingLot.unit_type)}</b>. Changes are kept in the audit log.</div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setEditingLot(null)} className="px-4 py-2 border rounded-lg text-xs font-bold">Cancel</button>
+              <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-xs font-bold">Save Lot</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

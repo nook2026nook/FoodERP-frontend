@@ -1,6 +1,6 @@
 import Icon from './Icon';
 
-const PLANT_MENUS = ['receiving', 'recipes', 'production', 'ready_to_ship', 'shipping', 'reports', 'wastage', 'recall'];
+const PLANT_MENUS = ['receiving', 'recipes', 'production_planning', 'production', 'ready_to_ship', 'shipping', 'reports', 'wastage', 'recall'];
 
 export default function Sidebar({
   activeTab,
@@ -71,6 +71,7 @@ export default function Sidebar({
           {can('recipes') && (
             <NavButton icon="FlaskConical" label="Formulations & Costing" badge="A–Z" active={activeTab === 'recipes'} onClick={() => onNavClick('recipes')} color="emerald" />
           )}
+          {can('production_planning') && <NavButton icon="Calculator" label="Production Planning" active={activeTab === 'production_planning'} onClick={() => onNavClick('production_planning')} color="emerald" />}
           {can('production') && <NavButton icon="Cpu" label="Production & Packaging" active={activeTab === 'production'} onClick={() => onNavClick('production')} color="emerald" />}
           {can('ready_to_ship') && <NavButton icon="PackageCheck" label="Ready to Ship Inventory" active={activeTab === 'ready_to_ship'} onClick={() => onNavClick('ready_to_ship')} color="blue" />}
           {can('shipping') && <NavButton icon="Send" label="Shipping & QuickBooks" active={activeTab === 'shipping'} onClick={() => onNavClick('shipping')} color="emerald" />}
