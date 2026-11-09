@@ -24,7 +24,7 @@ const splitsPayload = (splits) => Object.entries(splits).flatMap(([itemId, rows]
   rows.filter((r) => r.lot_id && parseFloat(r.quantity) > 0)
     .map((r) => ({ item_id: itemId, lot_id: r.lot_id, quantity: parseFloat(r.quantity) })));
 
-export default function ProductionView({ currentUserRole, showToast }) {
+export default function ProductionView({ currentUserRole, showToast, transferredRuns, onTransferConsumed }) {
   const canEdit = EDIT_ROLES.includes(currentUserRole);
   const canQuality = QUALITY_ROLES.includes(currentUserRole);
   const [tab, setTab] = useState('baking');
@@ -44,6 +44,23 @@ export default function ProductionView({ currentUserRole, showToast }) {
       showToast(errorMessage(e, 'Failed to load batches'), 'error');
     }
   }, [showToast]);
+
+  // A plan sent from Production Planning opens as a new, unsaved baking batch.
+  useEffect(() => {
+    if (!transferredRuns?.runs?.length) return;
+    setBakingPrefill({
+      transferred: true,
+      runs: transferredRuns.runs.map((run) => ({
+        recipe_id: run.recipe_id,
+        bins_count: run.bins_large + run.bins_small,
+        bins_large_count: run.bins_large,
+        bins_small_count: run.bins_small
+      })),
+      key: transferredRuns.key
+    });
+    setTab('baking');
+    onTransferConsumed?.();
+  }, [transferredRuns, onTransferConsumed]);
 
   useEffect(() => {
     recipesAPI.options()
@@ -422,8 +439,10 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
   return (
     <form onSubmit={(e) => { e.preventDefault(); save(false); }} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-600 px-6 py-3.5 text-white">
-        <h3 className="text-sm font-black uppercase tracking-wide">{prefill ? `Edit Baking Batch #${prefill.batch_number}` : 'Production Baking Screen'}</h3>
-        {prefill && <button type="button" onClick={() => onSaved(null, false)} className="rounded-lg bg-white px-3 py-1 text-xs font-bold text-amber-900">Cancel edit</button>}
+        <h3 className="text-sm font-black uppercase tracking-wide">
+          {prefill?.batch_number ? `Edit Baking Batch #${prefill.batch_number}` : prefill?.transferred ? 'Production Baking Screen (from Production Plan)' : 'Production Baking Screen'}
+        </h3>
+        {prefill && <button type="button" onClick={() => onSaved(null, false)} className="rounded-lg bg-white px-3 py-1 text-xs font-bold text-amber-900">{prefill.transferred ? 'Discard plan' : 'Cancel edit'}</button>}
       </div>
       <div className="space-y-4 border-b border-amber-200 bg-amber-50/70 p-5">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

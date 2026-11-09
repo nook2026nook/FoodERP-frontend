@@ -125,6 +125,15 @@ export const batchesAPI = {
   delete: (id) => api.delete(`/batches/${id}`)
 };
 
+// Production Planning: order boxes -> batches, bins and material pull list
+export const planningAPI = {
+  calculate: (data) => api.post('/planning/calculate', data),
+  listPlans: () => api.get('/planning/plans'),
+  createPlan: (data) => api.post('/planning/plans', data),
+  updatePlan: (id, data) => api.put(`/planning/plans/${id}`, data),
+  deletePlan: (id) => api.delete(`/planning/plans/${id}`)
+};
+
 // Shipments endpoints
 export const shipmentsAPI = {
   getAll: (params) => api.get('/shipments', { params }),

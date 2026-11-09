@@ -195,6 +195,7 @@ const QUICK_NAV = [
   { tab: 'ingredients_hub', subTab: 'baking', label: 'Ingredients', icon: 'Wheat' },
   { tab: 'receiving', label: 'Receiving Dock', icon: 'Download' },
   { tab: 'recipes', label: 'Formulations', icon: 'FlaskConical' },
+  { tab: 'production_planning', label: 'Planning', icon: 'Calculator' },
   { tab: 'production', label: 'Production', icon: 'Cpu' },
   { tab: 'ready_to_ship', label: 'Finished Stock', icon: 'PackageCheck' },
   { tab: 'shipping', label: 'Shipping (QBO)', icon: 'Send' },

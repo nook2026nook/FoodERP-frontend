@@ -5,7 +5,7 @@ import { Field, inputClass } from '../ui';
 
 const MENU_LABELS = {
   dashboard: 'Dashboard', ingredients_hub: 'Ingredients Hub', receiving: 'Receiving', recipes: 'Recipes',
-  production: 'Production', ready_to_ship: 'Ready to Ship', shipping: 'Shipping', reports: 'Reports',
+  production_planning: 'Production Planning', production: 'Production', ready_to_ship: 'Ready to Ship', shipping: 'Shipping', reports: 'Reports',
   wastage: 'Wastage', recall: 'Recall', help: 'Help'
 };
 
