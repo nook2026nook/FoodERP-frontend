@@ -133,7 +133,9 @@ export default function ShippingView({ currentUserRole, showToast }) {
         options.unshift({ value, label: `${a.batch_number} — ${lineFlavor(l)} (allocated)`, match: true });
       }
     }
-    return { matching: options.filter((o) => o.match), other: options.filter((o) => !o.match) };
+    // A line whose flavor is known only lists that flavor and size; the server refuses others.
+    if (l.recipe_id) return { matching: options.filter((o) => o.match), other: [] };
+    return { matching: [], other: options };
   };
   const currentChoice = (l) => {
     const ids = [...new Set(l.allocations.map((a) => a.batch_id))];
@@ -414,13 +416,16 @@ export default function ShippingView({ currentUserRole, showToast }) {
                               >
                                 <option value="">Map Batch #...</option>
                                 {value === 'multiple' && <option value="multiple" disabled>Multiple batches</option>}
+                                {l.recipe_id && matching.length === 0 && (
+                                  <option value="" disabled>No released {lineFlavor(l)} stock</option>
+                                )}
                                 {matching.length > 0 && (
-                                  <optgroup label="Same product">
+                                  <optgroup label={`${lineFlavor(l)} batches`}>
                                     {matching.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                                   </optgroup>
                                 )}
                                 {other.length > 0 && (
-                                  <optgroup label={matching.length ? 'Other batches' : 'Released batches'}>
+                                  <optgroup label="Released batches">
                                     {other.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                                   </optgroup>
                                 )}
