@@ -6,7 +6,7 @@ import { downloadCSV, todayStamp, usePageExport } from '../PageExport';
 
 // Ported from the client's v60 prototype "Production Planning": customer box
 // orders -> net boxes after released stock -> gross dough with wastage ->
-// whole batches (2 bins each) -> material pull list against live lot stock.
+// batches in half-batch steps (2 bins each) -> material pull list against live lot stock.
 // The server does the math (POST /planning/calculate) so it matches Production.
 
 const EDIT_ROLES = ['Administrator', 'Production Operator'];
@@ -388,7 +388,7 @@ export default function ProductionPlanningView({ currentUserRole, showToast, can
           </div>
         )}
       >
-        <p className="text-xs text-slate-500">Net weight ÷ (1 − wastage %) ÷ batch size, rounded up to whole batches. Net boxes subtract only <b>released</b> boxes (same stock as Ready to Ship).</p>
+        <p className="text-xs text-slate-500">Net weight ÷ (1 − wastage %) ÷ batch size, rounded up to the next half batch (1 bin). Net boxes subtract only <b>released</b> boxes (same stock as Ready to Ship).</p>
         {!flavors.length ? (
           <div className="p-6 text-center text-xs text-slate-400 border border-dashed rounded-xl">Enter boxes ordered above to see the schedule.</div>
         ) : (

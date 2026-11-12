@@ -505,7 +505,9 @@ function CostPreview({ preview }) {
   ];
   const formats = [
     ['575g', preview.units575, preview.costPer575g, preview.mfgPrice575g, preview.distPrice575g, preview.retailPrice575g],
-    ['312g', preview.units312, preview.costPer312g, preview.mfgPrice312g, preview.distPrice312g, preview.retailPrice312g]
+    ['312g', preview.units312, preview.costPer312g, preview.mfgPrice312g, preview.distPrice312g, preview.retailPrice312g],
+    // Total formula weight ÷ 180 g (2 decimals); display only.
+    ['180g', preview.units180 != null ? Number(preview.units180).toFixed(2) : '–', preview.costPer180g, preview.mfgPrice180g, preview.distPrice180g, preview.retailPrice180g]
   ];
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-emerald-50/60 border border-emerald-200 rounded-xl p-4 text-xs">
