@@ -12,12 +12,29 @@ const PACKAGING_EDITABLE = ['In Production', 'Completed', 'Quality Hold'];
 const CANCELLABLE = ['Planned', 'In Production', 'Completed', 'Quality Hold'];
 const EMPTY_COUNTS = { boxes_575g: '', bags_575g: '', boxes_312g: '', bags_312g: '' };
 
-/** {item_id: [{lot_id, quantity}]} from the server's suggested FIFO splits. */
-const splitsFromSuggestions = (requirements) => Object.fromEntries(
-  requirements.map((r) => [r.item_id, r.splits.length
-    ? r.splits.map((s) => ({ lot_id: s.lot_id, quantity: String(s.quantity) }))
-    : [{ lot_id: '', quantity: String(r.required) }]])
-);
+/**
+ * FIFO over the server's lot list (oldest first), skipping what the other flavor rows in this
+ * form already take from each lot, so a lot used up by one flavor isn't suggested again.
+ */
+const splitsAfterOthers = (requirements, otherRuns = []) => {
+  const used = {};
+  otherRuns.forEach((run) => Object.values(run.splits || {}).flat().forEach((s) => {
+    if (s.lot_id) used[s.lot_id] = (used[s.lot_id] || 0) + (parseFloat(s.quantity) || 0);
+  }));
+  return Object.fromEntries(requirements.map((r) => {
+    let need = Number(r.required) || 0;
+    const rows = [];
+    for (const lot of r.lots || []) {
+      if (need <= 0.0001) break;
+      const take = Math.min(need, Number(lot.available) - (used[lot.lot_id] || 0));
+      if (take > 0.0001) {
+        rows.push({ lot_id: lot.lot_id, quantity: String(Math.round(take * 1e4) / 1e4) });
+        need -= take;
+      }
+    }
+    return [r.item_id, rows.length ? rows : [{ lot_id: '', quantity: String(r.required) }]];
+  }));
+};
 
 /** Flatten editable splits to the API shape. */
 const splitsPayload = (splits) => Object.entries(splits).flatMap(([itemId, rows]) =>
@@ -281,10 +298,10 @@ function BakingRunEditor({ row, recipes, selectedRecipeIds, canEdit, onChange, o
         if (!active || latestSignature.current !== query) return;
         setRequirements(data);
         setReqError('');
-        onChange((current) => ({
+        onChange((current, others) => ({
           ...current,
           requirementsReady: true,
-          splits: Object.keys(current.splits || {}).length ? current.splits : splitsFromSuggestions(data.requirements)
+          splits: Object.keys(current.splits || {}).length ? current.splits : splitsAfterOthers(data.requirements, others)
         }));
       })
       .catch((e) => {
@@ -365,8 +382,9 @@ function BakingScreen({ prefill, recipes, canEdit, showToast, onSaved }) {
   const [saving, setSaving] = useState(false);
 
   const selectedRecipeIds = new Set(runs.map((run) => run.recipe_id).filter(Boolean));
+  // Functional updates also get the other rows, so lot suggestions can skip what they use.
   const updateRun = (index, next) => setRuns((current) => current.map((run, i) => (
-    i === index ? (typeof next === 'function' ? next(run) : next) : run
+    i === index ? (typeof next === 'function' ? next(run, current.filter((_, j) => j !== index)) : next) : run
   )));
   const updateEmployee = (index, value) => setEmployees((current) => current.map((name, i) => (i === index ? value : name)));
 
@@ -543,12 +561,12 @@ function PackagingRunEditor({ row, onChange, canEdit }) {
       .then(({ data }) => {
         if (!active || latestSignature.current !== query) return;
         setError('');
-        onChange((current) => ({
+        onChange((current, others) => ({
           ...current,
           result: data,
           splits: Object.keys(current.splits || {}).length
             ? current.splits
-            : splitsFromSuggestions(data.requirements.filter((requirement) => requirement.required > 0))
+            : splitsAfterOthers(data.requirements.filter((requirement) => requirement.required > 0), others)
         }));
       })
       .catch((e) => { if (active && latestSignature.current === query) setError(errorMessage(e, 'Could not calculate packaging')); });
@@ -681,8 +699,9 @@ function PackagingScreen({ batches, batchNumber, setBatchNumber, canEdit, showTo
     setRuns(selectedGroup.rows.map(packagingRunFrom));
   }, [batchNumber, batches]);
 
+  // Functional updates also get the other rows, so lot suggestions can skip what they use.
   const updateRun = (index, next) => setRuns((current) => current.map((run, i) => (
-    i === index ? (typeof next === 'function' ? next(run) : next) : run
+    i === index ? (typeof next === 'function' ? next(run, current.filter((_, j) => j !== index)) : next) : run
   )));
   const updateEmployee = (index, value) => setEmployees((current) => current.map((name, i) => (i === index ? value : name)));
 
