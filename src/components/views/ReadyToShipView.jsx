@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, PackageOpen, PackageCheck } from 'lucide-react';
+import { ChevronDown, ChevronRight, PackageOpen, PackageCheck, Pencil } from 'lucide-react';
 import { inventoryAPI, errorMessage } from '../../api/client';
 import { StatusPill, money } from '../ui';
 import ExportDropdownMenu, { downloadCSV, todayStamp, usePageExport } from '../PageExport';
@@ -12,6 +12,8 @@ const FORMATS = [
 
 export default function ReadyToShipView({ currentUserRole, showToast }) {
   const canOpenBoxes = OPEN_BOX_ROLES.includes(currentUserRole);
+  const canSetStock = currentUserRole === 'Administrator';
+  const [counting, setCounting] = useState(null); // { key, batch_id, format, boxes, bags } while editing a row
   const [data, setData] = useState({ products: [], total_value: 0 });
   const [batches, setBatches] = useState([]);
   const [expanded, setExpanded] = useState({});
@@ -54,6 +56,21 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
       await load();
     } catch (e) {
       showToast(errorMessage(e, 'Failed to open box'), 'error');
+    }
+  };
+
+  // Administrator enters the counted stock; the server records the difference as an adjustment.
+  const saveCount = async () => {
+    const boxes = Number(counting.boxes);
+    const bags = Number(counting.bags);
+    if (![boxes, bags].every((n) => Number.isInteger(n) && n >= 0)) { showToast('Enter whole numbers, 0 or more', 'error'); return; }
+    try {
+      await inventoryAPI.setStock(counting.batch_id, counting.format, boxes, bags);
+      showToast(`Stock set to ${boxes} box · ${bags} bag`);
+      setCounting(null);
+      await load();
+    } catch (e) {
+      showToast(errorMessage(e, 'Failed to update stock'), 'error');
     }
   };
 
@@ -135,7 +152,7 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
                         <td colSpan={5} className="px-6 py-3">
                           <table className="w-full text-xs">
                             <thead className="text-[10px] uppercase text-slate-500">
-                              <tr><th className="text-left py-1">Batch</th><th className="text-left">Produced</th><th className="text-left">Format</th><th className="text-left">Status</th><th className="text-right">Boxes</th><th className="text-right">Loose bags</th>{canOpenBoxes && <th />}</tr>
+                              <tr><th className="text-left py-1">Batch</th><th className="text-left">Produced</th><th className="text-left">Format</th><th className="text-left">Status</th><th className="text-right">Boxes</th><th className="text-right">Loose bags</th>{(canOpenBoxes || canSetStock) && <th />}</tr>
                             </thead>
                             <tbody>
                               {productBatches.map((b) => (
@@ -144,16 +161,35 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
                                   <td>{b.production_date}</td>
                                   <td>{b.format}</td>
                                   <td><StatusPill status={b.status} /></td>
-                                  <td className="text-right tabular-nums">{b.boxes_on_hand}</td>
-                                  <td className="text-right tabular-nums">{b.bags_on_hand}</td>
-                                  {canOpenBoxes && (
-                                    <td className="text-right">
-                                      {b.boxes_on_hand > 0 && (
-                                        <button onClick={() => openBox(b)} className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 hover:text-blue-900">
-                                          <PackageOpen size={13} /> Open a box
-                                        </button>
+                                  {counting?.key === `${b.batch_id}-${b.format}` ? (
+                                    <>
+                                      <td className="text-right"><input aria-label="Boxes on hand" type="number" min="0" step="1" value={counting.boxes} onChange={(e) => setCounting({ ...counting, boxes: e.target.value })} className="w-16 px-1.5 py-0.5 border rounded text-right" /></td>
+                                      <td className="text-right"><input aria-label="Loose bags on hand" type="number" min="0" step="1" value={counting.bags} onChange={(e) => setCounting({ ...counting, bags: e.target.value })} className="w-16 px-1.5 py-0.5 border rounded text-right" /></td>
+                                      <td className="text-right whitespace-nowrap">
+                                        <button onClick={saveCount} className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 mr-2">Save</button>
+                                        <button onClick={() => setCounting(null)} className="text-[11px] font-bold text-slate-500">Cancel</button>
+                                      </td>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <td className="text-right tabular-nums">{b.boxes_on_hand}</td>
+                                      <td className="text-right tabular-nums">{b.bags_on_hand}</td>
+                                      {(canOpenBoxes || canSetStock) && (
+                                        <td className="text-right whitespace-nowrap">
+                                          {canOpenBoxes && b.boxes_on_hand > 0 && (
+                                            <button onClick={() => openBox(b)} className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-700 hover:text-blue-900">
+                                              <PackageOpen size={13} /> Open a box
+                                            </button>
+                                          )}
+                                          {canSetStock && (
+                                            <button onClick={() => setCounting({ key: `${b.batch_id}-${b.format}`, batch_id: b.batch_id, format: b.format, boxes: String(b.boxes_on_hand), bags: String(b.bags_on_hand) })}
+                                              className="inline-flex items-center gap-1 ml-3 text-[11px] font-bold text-slate-600 hover:text-slate-900" title="Enter the counted stock">
+                                              <Pencil size={12} /> Edit
+                                            </button>
+                                          )}
+                                        </td>
                                       )}
-                                    </td>
+                                    </>
                                   )}
                                 </tr>
                               ))}

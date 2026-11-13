@@ -126,6 +126,19 @@ export default function ProductionView({ currentUserRole, showToast, transferred
     }
   };
 
+  // One click for QA: release every Completed batch. Quality Hold stays held on purpose.
+  const releasable = batches.filter((b) => b.status === 'Completed');
+  const releaseAll = async () => {
+    if (!window.confirm(`Release all ${releasable.length} Completed batch run(s) for shipping? Batches on Quality Hold are not included.`)) return;
+    const failed = [];
+    for (const b of releasable) {
+      try { await batchesAPI.setStatus(b.id, 'Released'); } catch (e) { failed.push(`${b.batch_number} ${b.recipe_name}: ${errorMessage(e, 'failed')}`); }
+    }
+    await loadBatches();
+    if (failed.length) showToast(`Released ${releasable.length - failed.length}; not released: ${failed.join('; ')}`, 'error');
+    else showToast(`Released ${releasable.length} batch run(s) for shipping`);
+  };
+
   const removeBatch = async (batch) => {
     if (!window.confirm(`Delete batch ${batch.batch_number}? All lot stock it used will be put back.`)) return;
     try {
@@ -188,6 +201,8 @@ export default function ProductionView({ currentUserRole, showToast, transferred
         onPackaging={openPackaging}
         onStatus={changeStatus}
         onDelete={removeBatch}
+        releasableCount={canQuality ? releasable.length : 0}
+        onReleaseAll={releaseAll}
         showToast={showToast}
       />
     </div>
@@ -810,7 +825,7 @@ function PackagingScreen({ batches, batchNumber, setBatchNumber, canEdit, showTo
 // Batch log
 // ---------------------------------------------------------------------------
 
-function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onStatus, onDelete, showToast }) {
+function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onStatus, onDelete, showToast, releasableCount = 0, onReleaseAll }) {
   const iconBtn = 'p-1 rounded hover:bg-slate-100';
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -846,6 +861,11 @@ function BatchLog({ batches, canEdit, canQuality, onEditBaking, onPackaging, onS
           <p className="text-xs text-slate-500 mt-0.5">Search across batch #, formulation, production date, bin count, and packaging status.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2 no-print">
+          {releasableCount > 0 && (
+            <button type="button" onClick={onReleaseAll} className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold">
+              <ShieldCheck size={14} /> Release All for Shipment ({releasableCount})
+            </button>
+          )}
           <div className="relative">
             <input
               type="text"

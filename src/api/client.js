@@ -149,7 +149,8 @@ export const shipmentsAPI = {
 export const inventoryAPI = {
   readyToShip: () => api.get('/inventory/ready-to-ship'),
   batches: (params) => api.get('/inventory/batches', { params }),
-  openBox: (batchId, format, boxes) => api.post('/inventory/open-box', { batch_id: batchId, format, boxes })
+  openBox: (batchId, format, boxes) => api.post('/inventory/open-box', { batch_id: batchId, format, boxes }),
+  setStock: (batchId, format, boxes, bags) => api.post('/inventory/set-stock', { batch_id: batchId, format, boxes, bags })
 };
 
 // Reports endpoints
