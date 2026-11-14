@@ -20,7 +20,7 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
 
   const load = useCallback(async () => {
     try {
-      const [rts, b] = await Promise.all([inventoryAPI.readyToShip(), inventoryAPI.batches()]);
+      const [rts, b] = await Promise.all([inventoryAPI.readyToShip(), inventoryAPI.batches({ include_empty: true })]);
       setData(rts.data);
       setBatches(b.data);
     } catch (e) {
