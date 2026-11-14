@@ -17,6 +17,7 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
   const [data, setData] = useState({ products: [], total_value: 0 });
   const [batches, setBatches] = useState([]);
   const [expanded, setExpanded] = useState({});
+  const [showAll, setShowAll] = useState({}); // recipe_id -> list every batch, not just the last 4
 
   const load = useCallback(async () => {
     try {
@@ -116,7 +117,12 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
             <tbody className="divide-y divide-slate-100">
               {data.products.map((p) => {
                 const isOpen = expanded[p.recipe_id];
-                const productBatches = batches.filter((b) => b.recipe_id === p.recipe_id);
+                // Newest batch # first; only the last 4 unless "Show all" (the full history gets long).
+                const allBatches = batches.filter((b) => b.recipe_id === p.recipe_id)
+                  .sort((a, b) => String(b.production_date).localeCompare(String(a.production_date)) || b.format.localeCompare(a.format));
+                const recent = [...new Set(allBatches.map((b) => b.batch_number))].slice(0, 4);
+                const productBatches = showAll[p.recipe_id] ? allBatches : allBatches.filter((b) => recent.includes(b.batch_number));
+                const olderCount = new Set(allBatches.map((b) => b.batch_number)).size - recent.length;
                 return (
                   <Fragment key={p.recipe_id}>
                     <tr className="hover:bg-slate-50">
@@ -194,6 +200,13 @@ export default function ReadyToShipView({ currentUserRole, showToast }) {
                                 </tr>
                               ))}
                               {productBatches.length === 0 && <tr><td colSpan={7} className="py-2 text-slate-400">No stock left in any batch.</td></tr>}
+                              {olderCount > 0 && (
+                                <tr><td colSpan={7} className="pt-2">
+                                  <button onClick={() => setShowAll((x) => ({ ...x, [p.recipe_id]: !x[p.recipe_id] }))} className="text-[11px] font-bold text-blue-700 hover:text-blue-900">
+                                    {showAll[p.recipe_id] ? 'Show only the last 4 batches' : `Show all batches (${olderCount} older)`}
+                                  </button>
+                                </td></tr>
+                              )}
                             </tbody>
                           </table>
                         </td>
