@@ -70,7 +70,10 @@ export const vaultAPI = {
   status: () => api.get('/vault/status'),
   unlock: (passcode) => api.post('/vault/unlock', { passcode }, { keepSessionOn401: true }),
   changePasscode: (currentPasscode, newPasscode) =>
-    api.post('/vault/change-passcode', { currentPasscode, newPasscode }, { keepSessionOn401: true })
+    api.post('/vault/change-passcode', { currentPasscode, newPasscode }, { keepSessionOn401: true }),
+  // Forgotten passcode: an administrator confirms with their own login password.
+  resetPasscode: (accountPassword, newPasscode) =>
+    api.post('/vault/change-passcode', { accountPassword, newPasscode }, { keepSessionOn401: true })
 };
 
 // Suppliers endpoints

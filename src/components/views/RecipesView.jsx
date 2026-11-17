@@ -64,6 +64,8 @@ function VaultGate({ isAdmin, showToast, onUnlock }) {
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resetting, setResetting] = useState(false); // admin forgot the passcode
+  const [loginPassword, setLoginPassword] = useState('');
 
   useEffect(() => {
     vaultAPI.status()
@@ -93,10 +95,10 @@ function VaultGate({ isAdmin, showToast, onUnlock }) {
     setBusy(true);
     setError('');
     try {
-      await vaultAPI.changePasscode('', passcode);
+      await (resetting ? vaultAPI.resetPasscode(loginPassword, passcode) : vaultAPI.changePasscode('', passcode));
       const r = await vaultAPI.unlock(passcode);
       setVaultToken(r.data.vaultToken);
-      showToast('Vault passcode set');
+      showToast(resetting ? 'Vault passcode reset' : 'Vault passcode set');
       onUnlock();
     } catch (err) {
       setError(errorMessage(err, 'Could not set the passcode'));
@@ -124,10 +126,24 @@ function VaultGate({ isAdmin, showToast, onUnlock }) {
         </form>
       )}
 
-      {configured && (
+      {configured && resetting && (
+        <form onSubmit={createPasscode} className="space-y-3 text-left">
+          <p className="text-xs text-slate-500 text-center">Forgot the passcode? Confirm with your own login password, then choose a new passcode (8+ characters).</p>
+          <input id="vault-login-password" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="Your login password" className={`${inputClass} text-sm`} autoComplete="current-password" required autoFocus />
+          <input id="vault-reset-new" type="password" value={passcode} onChange={(e) => setPasscode(e.target.value)} placeholder="New passcode" className={`${inputClass} text-sm`} minLength={8} required />
+          <input id="vault-reset-confirm" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Repeat new passcode" className={`${inputClass} text-sm`} minLength={8} required />
+          <button type="submit" disabled={busy} className="w-full py-3 bg-amber-600 text-white rounded-xl text-xs font-bold disabled:opacity-60">Reset Passcode &amp; Unlock</button>
+          <button type="button" onClick={() => { setResetting(false); setError(''); setPasscode(''); setConfirm(''); }} className="w-full text-xs font-bold text-slate-500">Back to unlock</button>
+        </form>
+      )}
+
+      {configured && !resetting && (
         <form onSubmit={unlock} className="space-y-3">
           <input id="vault-passcode" type="password" value={passcode} onChange={(e) => setPasscode(e.target.value)} placeholder="Vault passcode" className="w-full p-3 border rounded-xl text-center text-lg font-mono" autoFocus required />
           <button type="submit" disabled={busy} className="w-full py-3 bg-emerald-600 text-white rounded-xl text-xs font-bold disabled:opacity-60">Unlock Vault</button>
+          {isAdmin
+            ? <button type="button" onClick={() => { setResetting(true); setError(''); setPasscode(''); }} className="w-full text-xs font-bold text-amber-700 hover:text-amber-900">Forgot passcode? Reset it</button>
+            : <p className="text-[11px] text-slate-500">Forgot the passcode? Ask an administrator to reset it.</p>}
         </form>
       )}
     </div>

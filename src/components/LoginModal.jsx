@@ -91,6 +91,8 @@ export default function LoginModal({ onLogin }) {
           </button>
         </form>
 
+        <p className="text-center text-[11px] text-slate-500">Forgot your password? Ask your administrator to reset it (User Management, key icon).</p>
+
         <div className="text-center text-xs text-slate-400">
           <p>Secure authentication with role-based access control</p>
           <p className="mt-2">

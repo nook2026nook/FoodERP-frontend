@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pencil, Trash2, X } from 'lucide-react';
+import { KeyRound, Pencil, Trash2, X } from 'lucide-react';
 import { adminAPI, errorMessage } from '../../api/client';
 import { Field, inputClass } from '../ui';
 
@@ -8,6 +8,12 @@ const MENU_LABELS = {
   production_planning: 'Production Planning', production: 'Production', ready_to_ship: 'Ready to Ship', shipping: 'Shipping', reports: 'Reports',
   wastage: 'Wastage', recall: 'Recall', help: 'Help'
 };
+
+// 12 random characters; look-alikes (0/O, 1/l/I) left out so it can be read out or typed.
+function tempPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  return Array.from(crypto.getRandomValues(new Uint32Array(12)), (n) => chars[n % chars.length]).join('');
+}
 
 const emptyForm = () => ({ email: '', full_name: '', role: 'Production Operator', password: '', allowed_menus: [], active: true, customMenus: false });
 
@@ -19,6 +25,7 @@ export default function UserManagementModal({ showToast, onClose }) {
   const [editing, setEditing] = useState(null); // user being edited
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [issued, setIssued] = useState(null); // { user, password } just reset, shown once
 
   const load = useCallback(async () => {
     try {
@@ -75,6 +82,19 @@ export default function UserManagementModal({ showToast, onClose }) {
       setError(details || errorMessage(err, 'Could not save the user'));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Sets a new temporary password; the user must change it at their next sign-in.
+  const resetPassword = async (u) => {
+    if (!window.confirm(`Reset the password for ${u.full_name} (${u.email})? Their current password stops working.`)) return;
+    const password = tempPassword();
+    try {
+      await adminAPI.updateUser(u.id, { full_name: u.full_name, role: u.role, active: u.active, allowed_menus: u.allowed_menus, password });
+      setIssued({ user: u, password });
+      await load();
+    } catch (err) {
+      showToast(errorMessage(err, 'Could not reset the password'), 'error');
     }
   };
 
@@ -142,6 +162,25 @@ export default function UserManagementModal({ showToast, onClose }) {
           </button>
         </form>
 
+        {issued && (
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-2">
+            <div className="font-bold text-amber-900">Temporary password for {issued.user.full_name} ({issued.user.email})</div>
+            <div className="font-mono text-base font-black tracking-wider select-all">{issued.password}</div>
+            <p className="text-amber-800">Give it to them; they choose their own password at the next sign-in. It is not shown again.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => navigator.clipboard.writeText(issued.password).then(() => showToast('Copied'))} className="px-3 py-1.5 bg-white border border-amber-300 rounded-lg font-bold">Copy</button>
+              <a href={`mailto:${issued.user.email}?subject=${encodeURIComponent('FoodTrace ERP password reset')}&body=${encodeURIComponent(`Hello ${issued.user.full_name},
+
+Your FoodTrace ERP password was reset.
+Temporary password: ${issued.password}
+
+Sign in with it; you will be asked to choose a new password.`)}`}
+                className="px-3 py-1.5 bg-amber-600 text-white rounded-lg font-bold">Email it</a>
+              <button type="button" onClick={() => setIssued(null)} className="px-3 py-1.5 text-slate-500 font-bold">Done</button>
+            </div>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 font-bold uppercase border-y">
@@ -160,6 +199,7 @@ export default function UserManagementModal({ showToast, onClose }) {
                   <td className="px-3 py-2 text-slate-500">{u.allowed_menus.length ? `${u.allowed_menus.length} custom` : 'role default'}</td>
                   <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'never'}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <button onClick={() => resetPassword(u)} className="p-1 text-slate-500 hover:text-amber-700" aria-label={`Reset password for ${u.email}`} title="Reset password"><KeyRound size={14} /></button>
                     <button onClick={() => startEdit(u)} className="p-1 text-slate-500 hover:text-emerald-700" aria-label={`Edit ${u.email}`}><Pencil size={14} /></button>
                     <button onClick={() => remove(u)} className="p-1 text-slate-400 hover:text-red-600" aria-label={`Delete ${u.email}`}><Trash2 size={14} /></button>
                   </td>
