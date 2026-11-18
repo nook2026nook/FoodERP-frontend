@@ -53,6 +53,8 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
     try {
       const { data } = await qboAPI.syncInvoices();
       const parts = [`${data.created} new line(s)`];
+      if (data.updated) parts.push(`${data.updated} updated from QuickBooks`);
+      if (data.removed_lines) parts.push(`${data.removed_lines} line(s) removed`);
       if (data.unmapped) parts.push(`${data.unmapped} unmapped`);
       if (data.partial) parts.push(`${data.partial} short of stock`);
       if (data.removed) parts.push(`${data.removed} removed`);
@@ -184,6 +186,7 @@ export default function QuickBooksPanel({ currentUserRole, showToast, onSynced }
       {s && (
         <p className="text-[11px] text-slate-500">
           Last run ({s.mode}): {s.invoices} invoice(s) read, {s.created} line(s) added, {s.skipped} already synced
+          {s.updated ? `, ${s.updated} updated from QuickBooks` : ''}{s.removed_lines ? `, ${s.removed_lines} line(s) removed` : ''}
           {s.removed ? `, ${s.removed} removed` : ''}{s.before_start ? `, ${s.before_start} dated before ${s.start_date} ignored` : ''}{s.after_end ? `, ${s.after_end} dated after ${s.end_date} ignored` : ''}{s.errors.length ? `, ${s.errors.length} failed: ${s.errors.map((e) => `${e.invoice} (${e.error})`).join('; ')}` : ''}.
         </p>
       )}
